@@ -42,9 +42,24 @@ jobs:
 
       - name: Build APK
         run: |
-          yes | buildozer -v android debug
+          set -o pipefail
+          buildozer -v android debug 2>&1 | tee build.log
+
+      - name: Show last build log
+        if: always()
+        run: |
+          echo "===== LAST 200 LINES OF BUILD LOG ====="
+          tail -n 200 build.log || true
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: number-analysis-android-apk
