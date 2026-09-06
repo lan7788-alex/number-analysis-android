@@ -526,7 +526,25 @@ class NumberAnalysisRoot(BoxLayout):
         self.result_selector.text = "选择查看结果"
 
     def open_files(self, *_):
-        chooser = FileChooserListView(path=os.path.expanduser("~"), filters=["*.txt"], multiselect=True)
+        """
+        Android：调用系统原生“文件/我的文件”选择器。
+        支持单选、多选 TXT，并把选中的 URI 复制到 App 私有 imports 目录，
+        后续所有分析函数仍按普通本地路径读取，不需要改计算逻辑。
+        """
+        if platform == "android":
+            try:
+                self._open_android_file_picker()
+                return
+            except Exception as e:
+                self._show_message("附件选择失败", f"无法打开系统文件选择器：\n{e}")
+                return
+
+        # 非 Android 环境保留 Kivy 文件选择器，便于桌面调试。
+        chooser = FileChooserListView(
+            path=os.path.expanduser("~"),
+            filters=["*.txt"],
+            multiselect=True
+        )
         box = BoxLayout(orientation="vertical")
         box.add_widget(chooser)
         row = BoxLayout(size_hint_y=None, height=dp(48))
@@ -539,15 +557,189 @@ class NumberAnalysisRoot(BoxLayout):
 
         def choose(*_args):
             self.loaded_files = chooser.selection[:]
-            if self.loaded_files:
-                self.files_label.text = "已选择：" + "、".join(os.path.basename(p) for p in self.loaded_files)
-            else:
-                self.files_label.text = "未选择附件"
+            self._refresh_loaded_files_label()
             pop.dismiss()
 
         ok.bind(on_release=choose)
         cancel.bind(on_release=lambda *_a: pop.dismiss())
         pop.open()
+
+    def _open_android_file_picker(self):
+        from jnius import autoclass
+        from android import activity as android_activity
+
+        Intent = autoclass("android.content.Intent")
+        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+
+        # 只绑定一次回调，避免多次点“选择附件”产生重复回调。
+        if not getattr(self, "_android_picker_bound", False):
+            android_activity.bind(on_activity_result=self._on_android_activity_result)
+            self._android_picker_bound = True
+
+        intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        intent.addCategory(Intent.CATEGORY_OPENABLE)
+        intent.setType("text/plain")
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, True)
+
+        chooser = Intent.createChooser(intent, "选择TXT附件")
+        PythonActivity.mActivity.startActivityForResult(chooser, 9047)
+
+    def _on_android_activity_result(self, request_code, result_code, data):
+        if request_code != 9047:
+            return
+
+        try:
+            from jnius import autoclass
+
+            Activity = autoclass("android.app.Activity")
+            if result_code != Activity.RESULT_OK or data is None:
+                return
+
+            uris = []
+            clip = data.getClipData()
+
+            if clip is not None:
+                for i in range(clip.getItemCount()):
+                    uri = clip.getItemAt(i).getUri()
+                    if uri is not None:
+                        uris.append(uri)
+            else:
+                uri = data.getData()
+                if uri is not None:
+                    uris.append(uri)
+
+            if not uris:
+                self._show_message("附件选择", "没有读取到任何TXT附件。")
+                return
+
+            imported = []
+            errors = []
+
+            for i, uri in enumerate(uris, start=1):
+                try:
+                    imported.append(self._copy_android_uri_to_local(uri, i))
+                except Exception as e:
+                    errors.append(f"第{i}个附件：{e}")
+
+            self.loaded_files = imported
+            self._refresh_loaded_files_label()
+
+            if imported:
+                total_nums = 0
+                details = []
+                for p in imported:
+                    nums = self.read_file(p)
+                    total_nums += len(nums)
+                    details.append(f"{os.path.basename(p)}：{len(nums)}注")
+
+                msg = (
+                    f"成功选择 {len(imported)} 个附件。\n\n"
+                    + "\n".join(details)
+                )
+                if errors:
+                    msg += "\n\n未能读取：\n" + "\n".join(errors)
+                self._show_message("附件已读取", msg)
+            else:
+                self._show_message(
+                    "附件读取失败",
+                    "没有任何附件能够读取。\n" + "\n".join(errors)
+                )
+
+        except Exception as e:
+            self._show_message("附件读取失败", str(e))
+
+    def _android_uri_display_name(self, resolver, uri, fallback):
+        try:
+            OpenableColumns = __import__("jnius").autoclass("android.provider.OpenableColumns")
+            cursor = resolver.query(uri, None, None, None, None)
+            if cursor is not None:
+                try:
+                    idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if idx >= 0 and cursor.moveToFirst():
+                        name = cursor.getString(idx)
+                        if name:
+                            return str(name)
+                finally:
+                    cursor.close()
+        except Exception:
+            pass
+        return fallback
+
+    def _copy_android_uri_to_local(self, uri, index):
+        """
+        把 content:// URI 内容复制到 App 自己的 imports 目录。
+        TXT通常只有几KB，逐字节读取足够稳定，且不依赖外部存储权限。
+        """
+        from jnius import autoclass
+
+        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+        resolver = PythonActivity.mActivity.getContentResolver()
+
+        name = self._android_uri_display_name(
+            resolver,
+            uri,
+            f"附件_{index}.txt"
+        )
+        name = re.sub(r'[\\/:*?"<>|]', "_", name)
+        if not name.lower().endswith(".txt"):
+            name += ".txt"
+
+        import_dir = os.path.join(
+            App.get_running_app().user_data_dir,
+            "imports"
+        )
+        os.makedirs(import_dir, exist_ok=True)
+
+        # 避免多个同名附件互相覆盖。
+        base, ext = os.path.splitext(name)
+        out_path = os.path.join(import_dir, name)
+        suffix = 1
+        while os.path.exists(out_path):
+            out_path = os.path.join(import_dir, f"{base}_{suffix}{ext}")
+            suffix += 1
+
+        stream = resolver.openInputStream(uri)
+        if stream is None:
+            raise RuntimeError("无法打开附件")
+
+        try:
+            with open(out_path, "wb") as f:
+                while True:
+                    b = stream.read()
+                    if b == -1:
+                        break
+                    f.write(bytes((b & 0xFF,)))
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+        # 立刻验证是否能解析到三位组合，避免“选到了但后续得到0注”。
+        nums = self.read_file(out_path)
+        if not nums:
+            try:
+                os.remove(out_path)
+            except Exception:
+                pass
+            raise RuntimeError("TXT中没有识别到三位组合")
+
+        return out_path
+
+    def _refresh_loaded_files_label(self):
+        if not self.loaded_files:
+            self.files_label.text = "未选择附件"
+            return
+
+        names = [os.path.basename(p) for p in self.loaded_files]
+        if len(names) <= 2:
+            self.files_label.text = "已选：" + "、".join(names)
+        else:
+            self.files_label.text = (
+                f"已选{len(names)}个："
+                + "、".join(names[:2])
+                + "…"
+            )
 
     def read_file(self, path):
         data = open(path, "rb").read()
