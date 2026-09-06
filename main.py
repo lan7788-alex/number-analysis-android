@@ -98,6 +98,17 @@ def format_txt(nums):
     return "\n".join(" ".join(nums[i:i + 10]) for i in range(0, len(nums), 10))
 
 
+
+def section_text(title, nums):
+    nums = sorted(set(nums))
+    body = format_txt(nums) if nums else "（无）"
+    return f"【{title}】{len(nums)} 注\n{body}"
+
+def pair_section_text(title, pairs):
+    pairs = sorted(set(pairs))
+    body = "\n".join(" ".join(pairs[i:i+10]) for i in range(0, len(pairs), 10)) if pairs else "（无）"
+    return f"【{title}】{len(pairs)}组\n{body}"
+
 def size_shape(num):
     return "".join("大" if int(d) >= 5 else "小" for d in num)
 
@@ -424,41 +435,60 @@ class NumberAnalysisRoot(BoxLayout):
     def do_1(self):
         lines = [x.strip() for x in self.input1.text.splitlines() if x.strip()]
         if not lines:
-            self.result.text = "请输入口径1条件。"; return
+            self.result.text = "请输入口径1条件。"
+            return
         out, exports = [], {}
         for line in lines:
             p, err = parse_koujing1(line)
             if err:
-                out.append(f"{line}：{err}"); continue
+                out.append(f"{line}：{err}")
+                continue
             r = run_koujing1_normal(p["mother"], p["size_pos"], p["parity_pos"])
             out += [
                 f"【{line}】",
-                f"母号大小：{r['mother_size']}  母号奇偶：{r['mother_parity']}",
-                "大小入选6形态：" + "、".join(r["allowed_size"]),
-                "奇偶入选6形态：" + "、".join(r["allowed_parity"]),
-                f"全量 {len(r['full'])} 注；二同+三同 {len(r['same23'])} 注；三不同 {len(r['different'])} 注",
-                f"闭环：{len(r['same23'])}+{len(r['different'])}={len(r['full'])} √", ""
+                f"母号大小：{r['mother_size']}",
+                f"母号奇偶：{r['mother_parity']}",
+                "大小正常入选6形态：" + "、".join(r["allowed_size"]),
+                "奇偶正常入选6形态：" + "、".join(r["allowed_parity"]),
+                f"全量正常出号：{len(r['full'])} 注",
+                f"二同+三同：{len(r['same23'])} 注",
+                f"三不同：{len(r['different'])} 注",
+                f"闭环：{len(r['same23'])} + {len(r['different'])} = {len(r['full'])} √",
+                section_text("全量", r["full"]),
+                section_text("二同+三同", r["same23"]),
+                section_text("三不同", r["different"]),
+                ""
             ]
             base = normalize_rule_text(line)
             exports[f"{base}_全量_{len(r['full'])}注"] = r["full"]
             exports[f"{base}_二同三同_{len(r['same23'])}注"] = r["same23"]
             exports[f"{base}_三不同_{len(r['different'])}注"] = r["different"]
-        self.result.text = "\n".join(out); self.set_exports(**exports)
+        self.result.text = "\n".join(out)
+        self.set_exports(**exports)
 
     def do_2(self):
         size_selected = [x for x in SIZE_SHAPES if x in self.input1.text]
         parity_selected = [x for x in PARITY_SHAPES if x in self.input2.text]
-        if not size_selected or not parity_selected:
-            self.result.text = "大小和奇偶都至少输入1个有效形态。"; return
+        if not size_selected:
+            self.result.text = "请至少输入1个有效的大小形态。"
+            return
+        if not parity_selected:
+            self.result.text = "请至少输入1个有效的奇偶形态。"
+            return
         full = [n for n in ALL_NUMBERS if size_shape(n) in size_selected and parity_shape(n) in parity_selected]
         same23 = [n for n in full if repeat_type(n) != "三不同"]
         diff = [n for n in full if repeat_type(n) == "三不同"]
-        self.result.text = (
-            f"大小入选形态 {len(size_selected)}个：\n" + "、".join(size_selected) + "\n\n"
-            f"奇偶入选形态 {len(parity_selected)}个：\n" + "、".join(parity_selected) + "\n\n"
-            f"全量入选：{len(full)} 注\n二同+三同：{len(same23)} 注\n三不同：{len(diff)} 注\n"
-            f"闭环：{len(same23)}+{len(diff)}={len(full)} √"
-        )
+        self.result.text = "\n".join([
+            f"大小入选形态（{len(size_selected)}个）：" + "、".join(size_selected),
+            f"奇偶入选形态（{len(parity_selected)}个）：" + "、".join(parity_selected),
+            f"全量入选：{len(full)} 注",
+            f"二同+三同：{len(same23)} 注",
+            f"三不同：{len(diff)} 注",
+            f"闭环：{len(same23)} + {len(diff)} = {len(full)} √",
+            section_text("全量", full),
+            section_text("二同+三同", same23),
+            section_text("三不同", diff),
+        ])
         self.set_exports(**{
             f"形态取号_全量_{len(full)}注": full,
             f"形态取号_二同三同_{len(same23)}注": same23,
@@ -466,99 +496,258 @@ class NumberAnalysisRoot(BoxLayout):
         })
 
     def do_3(self):
-        pa, ea = parse_koujing1(self.input1.text.strip()); pb, eb = parse_koujing1(self.input2.text.strip())
+        pa, ea = parse_koujing1(self.input1.text.strip())
+        pb, eb = parse_koujing1(self.input2.text.strip())
         if ea or eb:
-            self.result.text = f"A：{ea or '正常'}\nB：{eb or '正常'}"; return
+            self.result.text = f"A：{ea or '正常'}\nB：{eb or '正常'}"
+            return
         A = set(run_koujing1(pa["mother"], pa["size_pos"], pa["parity_pos"])["full"])
         B = set(run_koujing1(pb["mother"], pb["size_pos"], pb["parity_pos"])["full"])
-        inter, ao, bo = sorted(A & B), sorted(A - B), sorted(B - A)
-        non, union = sorted((A - B) | (B - A)), sorted(A | B)
-        self.result.text = (
-            f"A全量 {len(A)} 注\nB全量 {len(B)} 注\n交集 {len(inter)} 注\nA独有 {len(ao)} 注\nB独有 {len(bo)} 注\n"
-            f"不交集合并 {len(non)} 注\n合并去重 {len(union)} 注\n闭环：{len(A)+len(B)}={2*len(inter)+len(non)} √"
-        )
-        self.set_exports(**{"交集": inter, "A独有": ao, "B独有": bo, "不交集合并": non, "合并去重": union})
+        inter = sorted(A & B)
+        ao = sorted(A - B)
+        bo = sorted(B - A)
+        non = sorted((A - B) | (B - A))
+        union = sorted(A | B)
+        self.result.text = "\n".join([
+            f"A全量：{len(A)} 注",
+            f"B全量：{len(B)} 注",
+            f"交集：{len(inter)} 注",
+            f"A独有：{len(ao)} 注",
+            f"B独有：{len(bo)} 注",
+            f"不交集合并：{len(non)} 注",
+            f"合并去重：{len(union)} 注",
+            f"闭环：{len(A)} + {len(B)} = 2×{len(inter)} + {len(non)} = {len(A)+len(B)} √",
+            section_text("A全量", sorted(A)),
+            section_text("B全量", sorted(B)),
+            section_text("交集", inter),
+            section_text("A独有", ao),
+            section_text("B独有", bo),
+            section_text("不交集合并", non),
+            section_text("合并去重", union),
+        ])
+        self.set_exports(**{
+            f"A全量_{len(A)}注": sorted(A),
+            f"B全量_{len(B)}注": sorted(B),
+            f"交集_{len(inter)}注": inter,
+            f"A独有_{len(ao)}注": ao,
+            f"B独有_{len(bo)}注": bo,
+            f"不交集合并_{len(non)}注": non,
+            f"合并去重_{len(union)}注": union,
+        })
 
     def do_4(self):
-        pa, ea = parse_koujing1(self.input1.text.strip()); pb, eb = parse_koujing1(self.input2.text.strip())
+        pa, ea = parse_koujing1(self.input1.text.strip())
+        pb, eb = parse_koujing1(self.input2.text.strip())
         if ea or eb:
-            self.result.text = f"A：{ea or '正常'}\nB：{eb or '正常'}"; return
+            self.result.text = f"A：{ea or '正常'}\nB：{eb or '正常'}"
+            return
         lines = [x.strip() for x in self.input3.text.splitlines() if x.strip()]
         if len(lines) < 5:
-            self.result.text = "输入3需要：第1行数字轨，后4行形态轨。"; return
-        digits = parse_digit_track(lines[0]); shapes = lines[1:5]
-        if not digits or any(classify_shape_token(s) is None for s in shapes):
-            self.result.text = "数字轨或4个形态轨无法识别。"; return
+            self.result.text = "输入3需要：第1行数字轨，后4行形态轨。"
+            return
+        digits = parse_digit_track(lines[0])
+        shapes = lines[1:5]
+        if not digits or any(classify_shape_token(x) is None for x in shapes):
+            self.result.text = "数字轨或4个形态轨无法识别。"
+            return
         A = set(run_koujing1(pa["mother"], pa["size_pos"], pa["parity_pos"])["different"])
         B = set(run_koujing1(pb["mother"], pb["size_pos"], pb["parity_pos"])["different"])
-        inter, ao, bo = sorted(A & B), sorted(A - B), sorted(B - A)
+        inter = sorted(A & B)
+        ao = sorted(A - B)
+        bo = sorted(B - A)
         non = sorted((A - B) | (B - A))
         db, bc = run_digit_track(non, digits)
-        _v, sb, cd = run_shape_track(non, shapes)
-        final_in = sorted(set(bc) & set(cd)); final_out = sorted(set(non) - set(final_in))
-        self.result.text = (
-            f"A三不同 {len(A)}；B三不同 {len(B)}；交集 {len(inter)}；A独有 {len(ao)}；B独有 {len(bo)}；不交集合并 {len(non)}\n"
-            f"数字BC：{len(bc)} 注\n形态CD：{len(cd)} 注\n最终BC∩CD：{len(final_in)} 注\n最终不入选：{len(final_out)} 注\n"
-            f"最终闭环：{len(final_in)}+{len(final_out)}={len(non)} √"
-        )
-        self.set_exports(**{"不交集合并": non, "数字BC": bc, "形态CD": cd, "最终入选": final_in, "最终不入选": final_out})
+        valid_shapes, sb, cd = run_shape_track(non, shapes)
+        final_in = sorted(set(bc) & set(cd))
+        final_out = sorted(set(non) - set(final_in))
+        out = [
+            f"A三不同：{len(A)} 注",
+            f"B三不同：{len(B)} 注",
+            f"交集：{len(inter)} 注",
+            f"A独有：{len(ao)} 注",
+            f"B独有：{len(bo)} 注",
+            f"不交集合并：{len(non)} 注",
+            f"前置闭环：{len(A)} + {len(B)} = 2×{len(inter)} + {len(non)} = {len(A)+len(B)} √",
+            section_text("A三不同", sorted(A)),
+            section_text("B三不同", sorted(B)),
+            section_text("交集", inter),
+            section_text("A独有", ao),
+            section_text("B独有", bo),
+            section_text("不交集合并", non),
+            "数字轨目标：" + "、".join(digits),
+        ]
+        for count in sorted(db):
+            out.append(section_text(f"数字轨出现{count}次", db[count]))
+        out += [
+            section_text("数字BC（2次+3次）", bc),
+            "形态轨：" + "、".join(x for x, _ in valid_shapes),
+        ]
+        for count in sorted(sb):
+            out.append(section_text(f"形态轨出现{count}次", sb[count]))
+        out += [
+            section_text("形态CD（3次+4次）", cd),
+            section_text("最终入选 BC∩CD", final_in),
+            section_text("最终不入选", final_out),
+            f"最终闭环：{len(final_in)} + {len(final_out)} = {len(non)} √",
+        ]
+        self.result.text = "\n".join(out)
+        exports = {
+            f"A三不同_{len(A)}注": sorted(A),
+            f"B三不同_{len(B)}注": sorted(B),
+            f"交集_{len(inter)}注": inter,
+            f"A独有_{len(ao)}注": ao,
+            f"B独有_{len(bo)}注": bo,
+            f"不交集合并_{len(non)}注": non,
+            f"数字BC_{len(bc)}注": bc,
+            f"形态CD_{len(cd)}注": cd,
+            f"最终入选_{len(final_in)}注": final_in,
+            f"最终不入选_{len(final_out)}注": final_out,
+        }
+        for count, vals in db.items():
+            exports[f"数字轨_出现{count}次_{len(vals)}注"] = vals
+        for count, vals in sb.items():
+            exports[f"形态轨_出现{count}次_{len(vals)}注"] = vals
+        self.set_exports(**exports)
 
     def need_files(self, count=None, minimum=None):
         n = len(self.loaded_files)
         if count is not None and n != count:
-            self.result.text = f"需要选择 {count} 个TXT附件，目前 {n} 个。"; return False
+            self.result.text = f"需要选择 {count} 个TXT附件，目前 {n} 个。"
+            return False
         if minimum is not None and n < minimum:
-            self.result.text = f"至少需要选择 {minimum} 个TXT附件，目前 {n} 个。"; return False
+            self.result.text = f"至少需要选择 {minimum} 个TXT附件，目前 {n} 个。"
+            return False
         return True
 
     def do_5(self):
-        if not self.need_files(count=2): return
-        A, B = set(self.read_file(self.loaded_files[0])), set(self.read_file(self.loaded_files[1]))
-        inter, ao, bo = sorted(A & B), sorted(A - B), sorted(B - A)
-        non, union = sorted((A - B) | (B - A)), sorted(A | B)
-        self.result.text = f"A {len(A)}；B {len(B)}；交集 {len(inter)}；A独有 {len(ao)}；B独有 {len(bo)}；不交集合并 {len(non)}；合并去重 {len(union)}\n闭环：{len(A)+len(B)}={2*len(inter)+len(non)} √"
-        self.set_exports(**{"交集": inter, "A独有": ao, "B独有": bo, "不交集合并": non, "合并去重": union})
+        if not self.need_files(count=2):
+            return
+        A = set(self.read_file(self.loaded_files[0]))
+        B = set(self.read_file(self.loaded_files[1]))
+        inter = sorted(A & B)
+        ao = sorted(A - B)
+        bo = sorted(B - A)
+        non = sorted((A - B) | (B - A))
+        union = sorted(A | B)
+        self.result.text = "\n".join([
+            f"A：{len(A)} 注", f"B：{len(B)} 注", f"交集：{len(inter)} 注",
+            f"A独有：{len(ao)} 注", f"B独有：{len(bo)} 注",
+            f"不交集合并：{len(non)} 注", f"合并去重：{len(union)} 注",
+            f"闭环：{len(A)} + {len(B)} = 2×{len(inter)} + {len(non)} = {len(A)+len(B)} √",
+            section_text("交集", inter), section_text("A独有", ao), section_text("B独有", bo),
+            section_text("不交集合并", non), section_text("合并去重", union),
+        ])
+        self.set_exports(**{
+            f"交集_{len(inter)}注": inter,
+            f"A独有_{len(ao)}注": ao,
+            f"B独有_{len(bo)}注": bo,
+            f"不交集合并_{len(non)}注": non,
+            f"合并去重_{len(union)}注": union,
+        })
 
     def do_6(self):
-        if not self.need_files(minimum=2): return
-        A = set(self.read_file(self.loaded_files[0])); out = [f"A：{len(A)} 注"] ; exports = {}
+        if not self.need_files(minimum=2):
+            return
+        A = set(self.read_file(self.loaded_files[0]))
+        out = [f"A：{len(A)} 注"]
+        exports = {}
         for i, path in enumerate(self.loaded_files[1:], start=1):
-            label = chr(65 + i); B = set(self.read_file(path))
-            inter, ao, bo = sorted(A & B), sorted(A - B), sorted(B - A)
+            label = chr(65 + i)
+            B = set(self.read_file(path))
+            inter = sorted(A & B)
+            ao = sorted(A - B)
+            bo = sorted(B - A)
             non = sorted((A - B) | (B - A))
-            out += [f"\nA 与 {label}（{os.path.basename(path)}）", f"{label} {len(B)}；交集 {len(inter)}；A独有 {len(ao)}；{label}独有 {len(bo)}；不交集合并 {len(non)}", f"闭环：{len(A)+len(B)}={2*len(inter)+len(non)} √"]
-            exports[f"A与{label}交集"] = inter; exports[f"A对{label}独有"] = ao; exports[f"{label}独有"] = bo; exports[f"A与{label}不交集合并"] = non
-        self.result.text = "\n".join(out); self.set_exports(**exports)
+            out += [
+                f"\n【A 与 {label}】{os.path.basename(path)}",
+                f"{label}：{len(B)} 注",
+                f"A∩{label}：{len(inter)} 注",
+                f"A独有：{len(ao)} 注",
+                f"{label}独有：{len(bo)} 注",
+                f"不交集合并：{len(non)} 注",
+                f"闭环：{len(A)} + {len(B)} = 2×{len(inter)} + {len(non)} = {len(A)+len(B)} √",
+                section_text(f"A∩{label}", inter),
+                section_text(f"A独有（相对{label}）", ao),
+                section_text(f"{label}独有", bo),
+                section_text(f"A与{label}不交集合并", non),
+            ]
+            exports[f"A与{label}交集_{len(inter)}注"] = inter
+            exports[f"A对{label}独有_{len(ao)}注"] = ao
+            exports[f"{label}独有_{len(bo)}注"] = bo
+            exports[f"A与{label}不交集合并_{len(non)}注"] = non
+        self.result.text = "\n".join(out)
+        self.set_exports(**exports)
 
     def do_7(self):
-        if not self.need_files(minimum=2): return
+        if not self.need_files(minimum=2):
+            return
         sets, details, total = [], [], 0
         for p in self.loaded_files:
-            s = set(self.read_file(p)); sets.append(s); total += len(s); details.append(f"{os.path.basename(p)}：{len(s)} 注")
-        merged = sorted(set().union(*sets)); dup = total - len(merged)
-        self.result.text = "\n".join(details + [f"累计 {total} 注", f"合并去重 {len(merged)} 注", f"重复计数 {dup}", f"闭环：{total}-{dup}={len(merged)} √"])
+            vals = set(self.read_file(p))
+            sets.append(vals)
+            total += len(vals)
+            details.append(f"{os.path.basename(p)}：{len(vals)} 注")
+        merged = sorted(set().union(*sets))
+        dup = total - len(merged)
+        self.result.text = "\n".join(details + [
+            f"累计：{total} 注",
+            f"合并去重：{len(merged)} 注",
+            f"重复计数：{dup}",
+            f"闭环：{total} - {dup} = {len(merged)} √",
+            section_text("合并去重", merged),
+        ])
         self.set_exports(**{f"合并去重_{len(merged)}注": merged})
 
     def do_8(self):
-        if not self.need_files(count=1): return
+        if not self.need_files(count=1):
+            return
         size_remove = [x for x in SIZE_SHAPES if x in self.input1.text]
         parity_remove = [x for x in PARITY_SHAPES if x in self.input2.text]
-        original = self.read_file(self.loaded_files[0]); remain, removed = [], []
+        original = self.read_file(self.loaded_files[0])
+        remain, removed = [], []
         for n in original:
             bad = size_shape(n) in size_remove or parity_shape(n) in parity_remove
             (removed if bad else remain).append(n)
-        self.result.text = f"原始 {len(original)} 注\n剩余 {len(remain)} 注\n去掉 {len(removed)} 注\n闭环：{len(remain)}+{len(removed)}={len(original)} √"
-        self.set_exports(**{"剩余": remain, "被去掉": removed})
+        self.result.text = "\n".join([
+            f"原始：{len(original)} 注",
+            f"剩余：{len(remain)} 注",
+            f"去掉：{len(removed)} 注",
+            f"闭环：{len(remain)} + {len(removed)} = {len(original)} √",
+            section_text("剩余组合", remain),
+            section_text("被去掉组合", removed),
+        ])
+        self.set_exports(**{
+            f"剩余_{len(remain)}注": remain,
+            f"被去掉_{len(removed)}注": removed,
+        })
 
     def do_9(self):
-        if not self.need_files(count=1): return
-        original = self.read_file(self.loaded_files[0]); two, three, diff = [], [], []
+        if not self.need_files(count=1):
+            return
+        original = self.read_file(self.loaded_files[0])
+        two, three, diff = [], [], []
         for n in original:
             t = repeat_type(n)
             (two if t == "二同" else three if t == "三同" else diff).append(n)
         same = sorted(two + three)
-        self.result.text = f"原始 {len(original)} 注\n二同 {len(two)} 注\n三同 {len(three)} 注\n二同+三同 {len(same)} 注\n三不同 {len(diff)} 注\n闭环：{len(same)}+{len(diff)}={len(original)} √"
-        self.set_exports(**{"二同三同": same, "三不同": diff, "二同": two, "三同": three})
+        self.result.text = "\n".join([
+            f"原始：{len(original)} 注",
+            f"二同：{len(two)} 注",
+            f"三同：{len(three)} 注",
+            f"二同+三同：{len(same)} 注",
+            f"三不同：{len(diff)} 注",
+            f"闭环：{len(same)} + {len(diff)} = {len(original)} √",
+            section_text("二同+三同", same),
+            section_text("三不同", diff),
+            section_text("二同", two),
+            section_text("三同", three),
+        ])
+        self.set_exports(**{
+            f"二同三同_{len(same)}注": same,
+            f"三不同_{len(diff)}注": diff,
+            f"二同_{len(two)}注": two,
+            f"三同_{len(three)}注": three,
+        })
 
     def parse_pair_mode(self):
         t = self.input2.text.strip()
@@ -568,35 +757,60 @@ class NumberAnalysisRoot(BoxLayout):
             return "三对全命中"
         return "两对命中（至少2对）"
 
-    def pair_common(self, base):
+    def pair_common(self, base, prefix=""):
         pairs = parse_pair_conditions(self.input1.text)
         if not pairs:
-            self.result.text = "请输入有效两位组合。"; return
+            self.result.text = "请输入有效两位组合。"
+            return
         pmode = self.parse_pair_mode()
         selected, rejected = run_pair_filter(base, pairs, pmode)
         same = [n for n in selected if repeat_type(n) != "三不同"]
         diff = [n for n in selected if repeat_type(n) == "三不同"]
-        self.result.text = f"两位条件 {len(pairs)}组\n模式：{pmode}\n原始 {len(base)} 注\n符合 {len(selected)} 注\n不符合 {len(rejected)} 注\n符合中的二同+三同 {len(same)} 注\n符合中的三不同 {len(diff)} 注\n总闭环：{len(selected)}+{len(rejected)}={len(base)} √\n分类闭环：{len(same)}+{len(diff)}={len(selected)} √"
-        self.set_exports(**{"符合条件全量": selected, "不符合条件": rejected, "二同三同": same, "三不同": diff})
+        self.result.text = "\n".join([
+            f"两位条件：{len(pairs)}组",
+            f"模式：{pmode}",
+            f"原始：{len(base)} 注",
+            f"符合：{len(selected)} 注",
+            f"不符合：{len(rejected)} 注",
+            f"符合中的二同+三同：{len(same)} 注",
+            f"符合中的三不同：{len(diff)} 注",
+            f"总闭环：{len(selected)} + {len(rejected)} = {len(base)} √",
+            f"分类闭环：{len(same)} + {len(diff)} = {len(selected)} √",
+            section_text("符合条件全量", selected),
+            section_text("不符合条件", rejected),
+            section_text("二同+三同", same),
+            section_text("三不同", diff),
+        ])
+        self.set_exports(**{
+            f"{prefix}两位命中_符合_{len(selected)}注": selected,
+            f"{prefix}两位命中_不符合_{len(rejected)}注": rejected,
+            f"{prefix}两位命中_二同三同_{len(same)}注": same,
+            f"{prefix}两位命中_三不同_{len(diff)}注": diff,
+        })
 
     def do_10(self):
-        if not self.need_files(count=1): return
+        if not self.need_files(count=1):
+            return
         self.pair_common(self.read_file(self.loaded_files[0]))
 
     def do_11(self):
-        self.pair_common(ALL_NUMBERS)
+        self.pair_common(ALL_NUMBERS, prefix="000-999_")
 
     def do_12(self):
-        if not self.need_files(count=1): return
+        if not self.need_files(count=1):
+            return
         digits = []
         for c in self.input1.text:
-            if c.isdigit() and c not in digits: digits.append(c)
+            if c.isdigit() and c not in digits:
+                digits.append(c)
         if not digits:
-            self.result.text = "请输入数字。"; return
+            self.result.text = "请输入数字。"
+            return
         lines = [x.strip() for x in self.input2.text.splitlines() if x.strip()]
         match_all = bool(lines and "全部" in lines[0])
         remove_action = bool(len(lines) > 1 and "去" in lines[1])
-        original = self.read_file(self.loaded_files[0]); matched, unmatched = [], []
+        original = self.read_file(self.loaded_files[0])
+        matched, unmatched = [], []
         for n in original:
             ok = all(d in n for d in digits) if match_all else any(d in n for d in digits)
             (matched if ok else unmatched).append(n)
@@ -604,31 +818,66 @@ class NumberAnalysisRoot(BoxLayout):
             result, other, rn, on = unmatched, matched, "去掉后剩余", "被去掉"
         else:
             result, other, rn, on = matched, unmatched, "符合条件", "不符合条件"
-        self.result.text = f"数字：{'、'.join(digits)}\n判断：{'必须同时含全部' if match_all else '含任意一个'}\n操作：{'去掉符合条件' if remove_action else '筛出符合条件'}\n原始 {len(original)} 注\n{rn} {len(result)} 注\n{on} {len(other)} 注\n闭环：{len(result)}+{len(other)}={len(original)} √"
-        self.set_exports(**{rn: result, on: other})
+        self.result.text = "\n".join([
+            "数字：" + "、".join(digits),
+            "判断方式：" + ("必须同时含全部" if match_all else "含任意一个"),
+            "操作：" + ("去掉符合条件的组合" if remove_action else "筛出符合条件的组合"),
+            f"原始：{len(original)} 注",
+            f"{rn}：{len(result)} 注",
+            f"{on}：{len(other)} 注",
+            f"闭环：{len(result)} + {len(other)} = {len(original)} √",
+            section_text(rn, result),
+            section_text(on, other),
+        ])
+        self.set_exports(**{
+            f"{rn}_{len(result)}注": result,
+            f"{on}_{len(other)}注": other,
+        })
 
     def do_13(self):
         tokens = parse_split_inputs(self.input1.text)
         if not tokens:
-            self.result.text = "请输入3-7位数字。"; return
-        out, merged = [], set()
+            self.result.text = "请输入3-7位数字。"
+            return
+        out, merged, exports = [], set(), {}
         for t in tokens:
-            pairs = split_to_pairs(t); merged.update(pairs)
-            out.append(f"{t} → {len(pairs)}组\n" + " ".join(pairs))
+            pairs = split_to_pairs(t)
+            merged.update(pairs)
+            out.append(pair_section_text(t, pairs))
+            exports[f"{t}_拆两位_{len(pairs)}组"] = "\n".join(" ".join(pairs[i:i+10]) for i in range(0, len(pairs), 10))
         merged = sorted(merged)
-        out.append(f"\n全部合并去重：{len(merged)}组\n" + " ".join(merged))
+        out.append(pair_section_text("全部合并去重", merged))
+        exports[f"三至七位拆两位_合并去重_{len(merged)}组"] = "\n".join(" ".join(merged[i:i+10]) for i in range(0, len(merged), 10))
         self.result.text = "\n\n".join(out)
-        self.set_exports(**{f"三至七位拆两位_合并去重_{len(merged)}组": "\n".join(" ".join(merged[i:i+10]) for i in range(0, len(merged), 10))})
+        self.set_exports(**exports)
 
     def do_14(self):
-        if not self.need_files(count=1): return
+        if not self.need_files(count=1):
+            return
         original = self.read_file(self.loaded_files[0])
         half = [n for n in original if sequence_type(n) == "半顺"]
         full = [n for n in original if sequence_type(n) == "全顺"]
         non = [n for n in original if sequence_type(n) == "非半顺"]
         hm = sorted(half + full)
-        self.result.text = f"原始 {len(original)} 注\n半顺 {len(half)} 注\n全顺 {len(full)} 注\n半顺以上 {len(hm)} 注\n非半顺以上 {len(non)} 注\n闭环1：{len(half)}+{len(full)}={len(hm)} √\n闭环2：{len(hm)}+{len(non)}={len(original)} √"
-        self.set_exports(**{"半顺以上": hm, "半顺": half, "全顺": full, "非半顺以上": non})
+        self.result.text = "\n".join([
+            f"原始：{len(original)} 注",
+            f"半顺：{len(half)} 注",
+            f"全顺：{len(full)} 注",
+            f"半顺以上：{len(hm)} 注",
+            f"非半顺以上：{len(non)} 注",
+            f"分类闭环1：{len(half)} + {len(full)} = {len(hm)} √",
+            f"分类闭环2：{len(hm)} + {len(non)} = {len(original)} √",
+            section_text("半顺以上", hm),
+            section_text("半顺", half),
+            section_text("全顺", full),
+            section_text("非半顺以上", non),
+        ])
+        self.set_exports(**{
+            f"半顺以上_{len(hm)}注": hm,
+            f"半顺_{len(half)}注": half,
+            f"全顺_{len(full)}注": full,
+            f"非半顺以上_{len(non)}注": non,
+        })
 
 
 class NumberAnalysisApp(App):
