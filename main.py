@@ -294,6 +294,9 @@ class NumberAnalysisRoot(BoxLayout):
         super().__init__(orientation="vertical", spacing=dp(8), padding=dp(8), **kwargs)
         self.loaded_files = []
         self.current_exports = {}
+        self.current_view_name = None
+        self.current_page = 0
+        self.page_size = 100
 
         self.add_widget(Label(text="数字分析工具（离线版）", size_hint_y=None, height=dp(42), font_size="20sp"))
         self.mode = Spinner(text=MODES[0], values=MODES, size_hint_y=None, height=dp(48))
@@ -324,7 +327,37 @@ class NumberAnalysisRoot(BoxLayout):
         self.files_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
         self.add_widget(self.files_label)
 
-        self.result = TextInput(readonly=True, multiline=True, size_hint_y=1)
+        self.summary = TextInput(
+            readonly=True,
+            multiline=True,
+            size_hint_y=None,
+            height=dp(185),
+            hint_text="分析摘要"
+        )
+        self.add_widget(self.summary)
+
+        chooserow = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
+        self.result_selector = Spinner(text="选择结果", values=(), size_hint_x=0.62)
+        self.result_selector.bind(text=self.on_result_selected)
+        self.prev_btn = Button(text="上一页", size_hint_x=0.19)
+        self.next_btn = Button(text="下一页", size_hint_x=0.19)
+        self.prev_btn.bind(on_release=self.prev_page)
+        self.next_btn.bind(on_release=self.next_page)
+        chooserow.add_widget(self.result_selector)
+        chooserow.add_widget(self.prev_btn)
+        chooserow.add_widget(self.next_btn)
+        self.add_widget(chooserow)
+
+        self.page_label = Label(text="", size_hint_y=None, height=dp(32), halign="left", valign="middle")
+        self.page_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
+        self.add_widget(self.page_label)
+
+        self.result = TextInput(
+            readonly=True,
+            multiline=True,
+            size_hint_y=1,
+            hint_text="完整组合在这里分页显示，每页最多100注（10注一行）"
+        )
         self.add_widget(self.result)
 
         exportrow = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
@@ -345,7 +378,13 @@ class NumberAnalysisRoot(BoxLayout):
         self.loaded_files = []
         self.files_label.text = "未选择附件"
         self.current_exports = {}
+        self.current_view_name = None
+        self.current_page = 0
+        self.summary.text = ""
         self.result.text = ""
+        self.result_selector.values = ()
+        self.result_selector.text = "选择结果"
+        self.page_label.text = ""
         self.input1.text = self.input2.text = self.input3.text = ""
 
         hints = {
@@ -372,8 +411,14 @@ class NumberAnalysisRoot(BoxLayout):
         self.input1.text = self.input2.text = self.input3.text = ""
         self.loaded_files = []
         self.files_label.text = "未选择附件"
+        self.summary.text = ""
         self.result.text = ""
         self.current_exports = {}
+        self.current_view_name = None
+        self.current_page = 0
+        self.result_selector.values = ()
+        self.result_selector.text = "选择结果"
+        self.page_label.text = ""
 
     def open_files(self, *_):
         chooser = FileChooserListView(path=os.path.expanduser("~"), filters=["*.txt"], multiselect=True)
@@ -408,8 +453,101 @@ class NumberAnalysisRoot(BoxLayout):
                 pass
         return []
 
+    def _summary_only(self, text):
+        """从旧结果文本中只保留统计、形态、闭环等信息，不把组合正文塞进摘要框。"""
+        lines = (text or "").splitlines()
+        kept = []
+        skip_numeric = False
+        for line in lines:
+            s = line.strip()
+            if not s:
+                if kept and kept[-1] != "":
+                    kept.append("")
+                continue
+            # section_text/pair_section_text 的标题行保留，后面的纯数字行丢弃
+            if s.startswith("【") and ("注" in s or "组" in s):
+                kept.append(s)
+                skip_numeric = True
+                continue
+            if re.fullmatch(r"(?:\d{3})(?:\s+\d{3})*", s):
+                continue
+            if re.fullmatch(r"(?:\d{2})(?:\s+\d{2})*", s):
+                continue
+            if s == "（无）":
+                continue
+            kept.append(line)
+        while kept and kept[-1] == "":
+            kept.pop()
+        return "\n".join(kept)
+
+    def _normalize_export_values(self, values):
+        if isinstance(values, str):
+            # 兼容拆两位功能旧格式；优先抓两/三位纯数字。
+            vals = re.findall(r"(?<!\d)(?:\d{2}|\d{3})(?!\d)", values)
+            return vals if vals else [values]
+        return list(values)
+
     def set_exports(self, **named):
         self.current_exports = named
+        names = list(named.keys())
+        self.result_selector.values = names
+        self.current_page = 0
+        if names:
+            self.current_view_name = names[0]
+            self.result_selector.text = names[0]
+            self.render_current_page()
+        else:
+            self.current_view_name = None
+            self.result_selector.text = "选择结果"
+            self.page_label.text = ""
+
+    def on_result_selected(self, _spinner, name):
+        if name not in self.current_exports:
+            return
+        self.current_view_name = name
+        self.current_page = 0
+        self.render_current_page()
+
+    def render_current_page(self):
+        name = self.current_view_name
+        if not name or name not in self.current_exports:
+            return
+        vals = self._normalize_export_values(self.current_exports[name])
+        total = len(vals)
+        if total == 0:
+            self.result.text = "（无）"
+            self.page_label.text = f"{name}｜0 注"
+            return
+        pages = (total + self.page_size - 1) // self.page_size
+        self.current_page = max(0, min(self.current_page, pages - 1))
+        start = self.current_page * self.page_size
+        end = min(start + self.page_size, total)
+        page_vals = vals[start:end]
+        self.result.text = format_txt(page_vals)
+        self.page_label.text = (
+            f"{name}｜共 {total}｜第 {self.current_page + 1}/{pages} 页｜"
+            f"当前显示 {start + 1}-{end}"
+        )
+        try:
+            self.result.cursor = (0, 0)
+            self.result.scroll_y = 0
+            self.result.scroll_x = 0
+        except Exception:
+            pass
+
+    def prev_page(self, *_):
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.render_current_page()
+
+    def next_page(self, *_):
+        if not self.current_view_name or self.current_view_name not in self.current_exports:
+            return
+        vals = self._normalize_export_values(self.current_exports[self.current_view_name])
+        pages = max(1, (len(vals) + self.page_size - 1) // self.page_size)
+        if self.current_page + 1 < pages:
+            self.current_page += 1
+            self.render_current_page()
 
     def export_results(self, *_):
         if not self.current_exports:
@@ -518,10 +656,27 @@ class NumberAnalysisRoot(BoxLayout):
     def run_analysis(self, *_):
         mode = self.mode.text
         self.current_exports = {}
+        self.current_view_name = None
+        self.current_page = 0
+        self.summary.text = ""
+        self.result.text = ""
+        self.result_selector.values = ()
+        self.result_selector.text = "选择结果"
+        self.page_label.text = ""
         try:
             fn = getattr(self, "do_" + str(MODES.index(mode) + 1))
             fn()
+            # 各 do_* 仍完全按原逻辑计算；只把原来的长文本拆成“摘要 + 分页结果”。
+            raw = self.result.text
+            self.summary.text = self._summary_only(raw)
+            if self.current_exports:
+                # set_exports 已建立完整结果列表，重新渲染当前首项，防止旧长文本覆盖。
+                self.render_current_page()
+            else:
+                # 错误提示等没有导出结果的情况，直接显示。
+                self.result.text = raw
         except Exception as e:
+            self.summary.text = "运行失败"
             self.result.text = f"运行出错：{e}"
 
     def do_1(self):
@@ -936,10 +1091,10 @@ class NumberAnalysisRoot(BoxLayout):
             pairs = split_to_pairs(t)
             merged.update(pairs)
             out.append(pair_section_text(t, pairs))
-            exports[f"{t}_拆两位_{len(pairs)}组"] = "\n".join(" ".join(pairs[i:i+10]) for i in range(0, len(pairs), 10))
+            exports[f"{t}_拆两位_{len(pairs)}组"] = pairs
         merged = sorted(merged)
         out.append(pair_section_text("全部合并去重", merged))
-        exports[f"三至七位拆两位_合并去重_{len(merged)}组"] = "\n".join(" ".join(merged[i:i+10]) for i in range(0, len(merged), 10))
+        exports[f"三至七位拆两位_合并去重_{len(merged)}组"] = merged
         self.result.text = "\n\n".join(out)
         self.set_exports(**exports)
 
