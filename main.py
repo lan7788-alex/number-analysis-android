@@ -291,139 +291,229 @@ def sequence_type(num):
 
 
 class NumberAnalysisRoot(BoxLayout):
+
     def __init__(self, **kwargs):
-        super().__init__(orientation="vertical", spacing=dp(8), padding=dp(8), **kwargs)
+        super().__init__(orientation="vertical", spacing=dp(6), padding=dp(6), **kwargs)
+
         self.loaded_files = []
         self.current_exports = {}
         self.current_view_name = None
-        self.current_page = 0
-        self.page_size = 100
 
-        self.add_widget(Label(text="数字分析工具（离线版）", size_hint_y=None, height=dp(42), font_size="20sp"))
-        self.mode = Spinner(text=MODES[0], values=MODES, size_hint_y=None, height=dp(48))
+        self.add_widget(Label(
+            text="数字分析工具（离线版）",
+            size_hint_y=None,
+            height=dp(36),
+            font_size="19sp"
+        ))
+
+        self.mode = Spinner(
+            text=MODES[0],
+            values=MODES,
+            size_hint_y=None,
+            height=dp(46)
+        )
         self.mode.bind(text=self.on_mode_change)
         self.add_widget(self.mode)
 
-        self.instructions = Label(text="", size_hint_y=None, height=dp(72), halign="left", valign="middle")
-        self.instructions.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
+        self.instructions = Label(
+            text="",
+            size_hint_y=None,
+            height=dp(34),
+            halign="left",
+            valign="middle"
+        )
+        self.instructions.bind(
+            size=lambda inst, val: setattr(inst, "text_size", (val[0], None))
+        )
         self.add_widget(self.instructions)
 
-        self.input1 = TextInput(multiline=True, hint_text="输入1", size_hint_y=None, height=dp(110))
-        self.input2 = TextInput(multiline=True, hint_text="输入2", size_hint_y=None, height=dp(110))
-        self.input3 = TextInput(multiline=True, hint_text="输入3", size_hint_y=None, height=dp(90))
+        self.input1 = TextInput(multiline=True, size_hint_y=None, height=dp(74))
+        self.input2 = TextInput(multiline=True, size_hint_y=None, height=dp(74))
+        self.input3 = TextInput(multiline=True, size_hint_y=None, height=dp(74))
         self.add_widget(self.input1)
         self.add_widget(self.input2)
         self.add_widget(self.input3)
 
-        btnrow = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
-        bload = Button(text="选择TXT附件")
+        self.file_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        bload = Button(text="选择TXT附件", size_hint_x=0.38)
         bload.bind(on_release=self.open_files)
-        brunar = Button(text="开始分析")
-        brunar.bind(on_release=self.run_analysis)
-        btnrow.add_widget(bload)
-        btnrow.add_widget(brunar)
-        self.add_widget(btnrow)
+        self.files_label = Label(
+            text="未选择附件",
+            halign="left",
+            valign="middle",
+            size_hint_x=0.62
+        )
+        self.files_label.bind(
+            size=lambda inst, val: setattr(inst, "text_size", (val[0], None))
+        )
+        self.file_row.add_widget(bload)
+        self.file_row.add_widget(self.files_label)
+        self.add_widget(self.file_row)
 
-        self.files_label = Label(text="未选择附件", size_hint_y=None, height=dp(54), halign="left", valign="middle")
-        self.files_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
-        self.add_widget(self.files_label)
+        action_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        brun = Button(text="开始分析")
+        brun.bind(on_release=self.run_analysis)
+        bclear = Button(text="清空")
+        bclear.bind(on_release=self.clear_all)
+        action_row.add_widget(brun)
+        action_row.add_widget(bclear)
+        self.add_widget(action_row)
 
         self.summary = TextInput(
             readonly=True,
             multiline=True,
             size_hint_y=None,
-            height=dp(185),
+            height=dp(96),
             hint_text="分析摘要"
         )
         self.add_widget(self.summary)
 
-        chooserow = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
-        self.result_selector = Spinner(text="选择结果", values=(), size_hint_x=0.68)
+        self.result_selector = Spinner(
+            text="选择查看结果",
+            values=(),
+            size_hint_y=None,
+            height=dp(46)
+        )
         self.result_selector.bind(text=self.on_result_selected)
-        bview = Button(text="全屏查看", size_hint_x=0.32)
-        bview.bind(on_release=self.open_full_result)
-        chooserow.add_widget(self.result_selector)
-        chooserow.add_widget(bview)
-        self.add_widget(chooserow)
-
-        self.page_label = Label(text="", size_hint_y=None, height=dp(38), halign="left", valign="middle")
-        self.page_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
-        self.add_widget(self.page_label)
+        self.add_widget(self.result_selector)
 
         self.result = TextInput(
             readonly=True,
             multiline=True,
-            size_hint_y=None,
-            height=dp(360),
-            hint_text="选择结果后，这里显示完整组合（10注一行，可上下滚动）"
+            size_hint_y=1,
+            hint_text="分析后这里直接显示完整组合，10注一行"
         )
         self.add_widget(self.result)
 
-        exportrow1 = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
+        save_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
         bcurrent = Button(text="保存当前到下载")
         bcurrent.bind(on_release=self.export_current_to_download)
         ball = Button(text="保存全部到下载")
         ball.bind(on_release=self.export_results_to_download)
-        exportrow1.add_widget(bcurrent)
-        exportrow1.add_widget(ball)
-        self.add_widget(exportrow1)
-
-        exportrow2 = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
-        bexport_app = Button(text="导出全部到App目录")
-        bexport_app.bind(on_release=self.export_results)
-        bclear = Button(text="清空")
-        bclear.bind(on_release=self.clear_all)
-        exportrow2.add_widget(bexport_app)
-        exportrow2.add_widget(bclear)
-        self.add_widget(exportrow2)
+        save_row.add_widget(bcurrent)
+        save_row.add_widget(ball)
+        self.add_widget(save_row)
 
         self.on_mode_change(self.mode, self.mode.text)
 
+
     def on_mode_change(self, _spinner, mode):
         self.loaded_files = []
-        self.files_label.text = "未选择附件"
         self.current_exports = {}
         self.current_view_name = None
-        self.current_page = 0
+        self.files_label.text = "未选择附件"
         self.summary.text = ""
         self.result.text = ""
         self.result_selector.values = ()
-        self.result_selector.text = "选择结果"
-        self.page_label.text = ""
-        self.input1.text = self.input2.text = self.input3.text = ""
+        self.result_selector.text = "选择查看结果"
+        self.input1.text = ""
+        self.input2.text = ""
+        self.input3.text = ""
 
-        hints = {
-            "口径1取号": ("输入口径1条件，可多行，例如：592百个\n888大小百十奇偶十个", "", ""),
-            "形态取号": ("输入大小形态，可任意数量，例如：大大大、大大小、大小大", "输入奇偶形态，可任意数量，例如：奇奇奇、奇奇偶、偶奇奇", ""),
-            "口径1双条件全量交集": ("条件A，例如：818十个", "条件B，例如：881十个", ""),
-            "口径1交集后数字形态轨": ("母号A条件，例如：983十个", "母号B条件，例如：938十个", "第1行数字389；后续4行形态"),
-            "交集 / 不交集": ("请用“选择TXT附件”选择A、B两个文件", "", ""),
-            "A分别与多个文件交集": ("第一个附件为A，其余为B/C/D...", "", ""),
-            "合并去重": ("选择至少2个TXT附件", "", ""),
-            "形态筛选": ("输入要去掉的大小形态，可为空", "输入要去掉的奇偶形态，可为空", "选择1个基础TXT"),
-            "二同 / 三同 / 三不同": ("选择1个基础TXT", "", ""),
-            "两位组合命中筛选（按附件）": ("输入两位组合，如：01 03 05 06...", "模式：至少2对 / 恰好2对 / 三对全命中", "选择1个基础TXT"),
-            "两位组合命中筛选（000-999）": ("输入两位组合，如：01 03 05 06...", "模式：至少2对 / 恰好2对 / 三对全命中", ""),
-            "数字包含 / 去除筛选": ("输入数字，例如：8 或 368", "第1行：任意/全部；第2行：筛出/去掉", "选择1个基础TXT"),
-            "三至七位拆两位组合": ("输入3-7位数字，可多组，例如：345 4567 124579", "", ""),
-            "半顺以上筛选": ("选择1个基础TXT", "", ""),
+        config = {
+            "口径1取号": (
+                1, False,
+                "输入口径1条件，可多行，例如：899百个",
+                "", ""
+            ),
+            "形态取号": (
+                2, False,
+                "输入大小形态，可自由搭配",
+                "输入奇偶形态，可自由搭配",
+                ""
+            ),
+            "口径1双条件全量交集": (
+                2, False,
+                "条件A，例如：818十个",
+                "条件B，例如：881十个",
+                ""
+            ),
+            "口径1交集后数字形态轨": (
+                3, False,
+                "母号A条件，例如：983十个",
+                "母号B条件，例如：938十个",
+                "第1行数字389；后续4行形态"
+            ),
+            "交集 / 不交集": (
+                0, True,
+                "", "", ""
+            ),
+            "A分别与多个文件交集": (
+                0, True,
+                "", "", ""
+            ),
+            "合并去重": (
+                0, True,
+                "", "", ""
+            ),
+            "形态筛选": (
+                2, True,
+                "输入要去掉的大小形态，可为空",
+                "输入要去掉的奇偶形态，可为空",
+                ""
+            ),
+            "二同 / 三同 / 三不同": (
+                0, True,
+                "", "", ""
+            ),
+            "两位组合命中筛选（按附件）": (
+                2, True,
+                "输入两位组合，如：01 03 05 06 ...",
+                "模式：至少2对 / 恰好2对 / 三对全命中",
+                ""
+            ),
+            "两位组合命中筛选（000-999）": (
+                2, False,
+                "输入两位组合，如：01 03 05 06 ...",
+                "模式：至少2对 / 恰好2对 / 三对全命中",
+                ""
+            ),
+            "数字包含 / 去除筛选": (
+                2, True,
+                "输入数字，例如：8 或 368",
+                "第1行：任意/全部；第2行：筛出/去掉",
+                ""
+            ),
+            "三至七位拆两位组合": (
+                1, False,
+                "输入3-7位数字，可多组，例如：345 4567 124579",
+                "", ""
+            ),
+            "半顺以上筛选": (
+                0, True,
+                "", "", ""
+            ),
         }
-        a, b, c = hints[mode]
+
+        input_count, need_file, h1, h2, h3 = config[mode]
         self.instructions.text = "本次只使用当前输入和当前附件，不调用旧数据。"
-        self.input1.hint_text, self.input2.hint_text, self.input3.hint_text = a, b, c
+        hints = [h1, h2, h3]
+        widgets = [self.input1, self.input2, self.input3]
+
+        for i, widget in enumerate(widgets):
+            show = i < input_count
+            widget.hint_text = hints[i]
+            widget.height = dp(74) if show else 0
+            widget.opacity = 1 if show else 0
+            widget.disabled = not show
+
+        self.file_row.height = dp(46) if need_file else 0
+        self.file_row.opacity = 1 if need_file else 0
+        self.file_row.disabled = not need_file
+
 
     def clear_all(self, *_):
-        self.input1.text = self.input2.text = self.input3.text = ""
+        self.input1.text = ""
+        self.input2.text = ""
+        self.input3.text = ""
         self.loaded_files = []
         self.files_label.text = "未选择附件"
         self.summary.text = ""
         self.result.text = ""
         self.current_exports = {}
         self.current_view_name = None
-        self.current_page = 0
         self.result_selector.values = ()
-        self.result_selector.text = "选择结果"
-        self.page_label.text = ""
+        self.result_selector.text = "选择查看结果"
 
     def open_files(self, *_):
         chooser = FileChooserListView(path=os.path.expanduser("~"), filters=["*.txt"], multiselect=True)
@@ -503,6 +593,7 @@ class NumberAnalysisRoot(BoxLayout):
         close.bind(on_release=lambda *_: pop.dismiss())
         pop.open()
 
+
     def _scroll_result_top(self, *_):
         try:
             self.result.cursor = (0, 0)
@@ -511,38 +602,51 @@ class NumberAnalysisRoot(BoxLayout):
         except Exception:
             pass
 
+
     def set_exports(self, **named):
+        # do_* 在调用本方法前，self.result.text 中已经写好了统计、闭环和组合。
+        raw = self.result.text
+        self.summary.text = self._summary_only(raw)
+
         self.current_exports = named
         names = list(named.keys())
         self.result_selector.values = names
+
         if names:
             self.current_view_name = names[0]
             self.result_selector.text = names[0]
             self.show_result(names[0])
         else:
             self.current_view_name = None
-            self.result_selector.text = "选择结果"
-            self.page_label.text = ""
+            self.result_selector.text = "选择查看结果"
+
 
     def on_result_selected(self, _spinner, name):
         if name in self.current_exports:
             self.current_view_name = name
             self.show_result(name)
 
+
     def show_result(self, name):
-        values = self.current_exports.get(name, [])
+        values = self.current_exports.get(name)
+        if values is None:
+            return
+
         if isinstance(values, str):
             body = values
             vals = re.findall(r"(?<!\d)(?:\d{2}|\d{3})(?!\d)", values)
-            count = len(vals) if vals else 0
+            count = len(vals)
             unit = "组" if vals and all(len(x) == 2 for x in vals) else "注"
         else:
             vals = sorted(set(values))
-            body = ("\n".join(" ".join(vals[i:i+10]) for i in range(0, len(vals), 10))) if vals else "（无）"
+            body = "\n".join(
+                " ".join(vals[i:i + 10])
+                for i in range(0, len(vals), 10)
+            ) if vals else "（无）"
             count = len(vals)
             unit = "组" if vals and all(len(x) == 2 for x in vals) else "注"
-        self.result.text = body
-        self.page_label.text = f"{name}｜共 {count} {unit}｜完整显示，可上下滚动"
+
+        self.result.text = f"【{name}】 共 {count} {unit}\n\n{body}"
         Clock.schedule_once(self._scroll_result_top, 0)
 
     def open_full_result(self, *_):
@@ -685,32 +789,29 @@ class NumberAnalysisRoot(BoxLayout):
             msg += "\n\n保存失败：\n" + "\n".join(failed)
         self._show_message("保存结果", msg or "没有生成文件。")
 
+
     def run_analysis(self, *_):
         mode = self.mode.text
         self.current_exports = {}
         self.current_view_name = None
-        self.current_page = 0
         self.summary.text = ""
         self.result.text = ""
         self.result_selector.values = ()
-        self.result_selector.text = "选择结果"
-        self.page_label.text = ""
+        self.result_selector.text = "选择查看结果"
+
         try:
             fn = getattr(self, "do_" + str(MODES.index(mode) + 1))
             fn()
-            # 各 do_* 仍完全按原逻辑计算；只把原来的长文本拆成“摘要 + 分页结果”。
-            raw = self.result.text
-            self.summary.text = self._summary_only(raw)
-            if self.current_exports:
-                # set_exports 已建立完整结果列表；显示当前选择的完整结果。
-                if self.current_view_name:
-                    self.show_result(self.current_view_name)
-            else:
-                # 错误提示等没有导出结果的情况，直接显示。
-                self.result.text = raw
+
+            # 正常分析函数会调用 set_exports；错误信息则直接显示。
+            if not self.current_exports and self.result.text:
+                self.summary.text = self.result.text
+                Clock.schedule_once(self._scroll_result_top, 0)
+
         except Exception as e:
             self.summary.text = "运行失败"
             self.result.text = f"运行出错：{e}"
+            Clock.schedule_once(self._scroll_result_top, 0)
 
     def do_1(self):
         lines = [x.strip() for x in self.input1.text.splitlines() if x.strip()]
@@ -1161,13 +1262,10 @@ class NumberAnalysisRoot(BoxLayout):
 
 
 class NumberAnalysisApp(App):
+
     def build(self):
         self.title = "数字分析工具"
-        content = NumberAnalysisRoot(size_hint_y=None)
-        content.bind(minimum_height=content.setter("height"))
-        scroller = ScrollView(do_scroll_x=False, do_scroll_y=True)
-        scroller.add_widget(content)
-        return scroller
+        return NumberAnalysisRoot()
 
 
 if __name__ == "__main__":
