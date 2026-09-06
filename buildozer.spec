@@ -4,15 +4,13 @@ package.name = numberanalysis
 package.domain = org.lan7788alex
 source.dir = .
 source.include_exts = py,txt,png,jpg,kv,atlas,ttf,otf,ttc
-version = 1.5
+version = 2.0
 
-# Python/Kivy：固定到 p4a 2024.01.21 对应的 Python 3.11 体系
 requirements = python3==3.11.9,hostpython3==3.11.9,kivy==2.3.0,pyjnius
 
 orientation = portrait
 fullscreen = 0
 
-# Android
 android.api = 35
 android.minapi = 24
 android.ndk_api = 24
@@ -21,11 +19,11 @@ android.archs = arm64-v8a
 android.accept_sdk_license = True
 android.debug_artifact = apk
 
-# python-for-android：固定到默认 Python 3.11 的稳定版本
 p4a.branch = v2024.01.21
 p4a.bootstrap = sdl2
 
-# 离线软件，不申请联网权限
+# Android 10+ 保存 Download 使用 MediaStore，不需要存储权限。
+# 低版本保留写外部存储权限兼容路径。
 android.permissions = WRITE_EXTERNAL_STORAGE
 
 [buildozer]
