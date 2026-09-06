@@ -9,6 +9,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -21,7 +22,11 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git zip unzip autoconf automake libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev openjdk-17-jdk gettext python -m pip install --upgrade pip setuptools wheel pip install "cython<3" buildozer - name: Build APK
+          sudo apt-get install -y git zip unzip autoconf automake libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev openjdk-17-jdk gettext
+          python -m pip install --upgrade pip setuptools wheel
+          pip install "cython<3" buildozer
+
+      - name: Build APK
         run: |
           set -o pipefail
           buildozer -v android debug 2>&1 | tee build.log
@@ -45,4 +50,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: number-analysis-android-apk
-          path: bin/*.apk if-no-files-found: error
+          path: bin/*.apk
+          if-no-files-found: error
