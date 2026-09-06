@@ -496,7 +496,10 @@ class NumberAnalysisRoot(BoxLayout):
         }
 
         input_count, need_file, h1, h2, h3 = config[mode]
-        self.instructions.text = "本次只使用当前输入和当前附件，不调用旧数据。"
+        self.instructions.text = (
+            "本次只使用当前输入和当前附件，不调用旧数据。"
+            + (" 需要附件时点‘选择TXT附件’。" if need_file else "")
+        )
         hints = [h1, h2, h3]
         widgets = [self.input1, self.input2, self.input3]
 
@@ -578,7 +581,7 @@ class NumberAnalysisRoot(BoxLayout):
 
         intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
         intent.addCategory(Intent.CATEGORY_OPENABLE)
-        intent.setType("text/plain")
+        intent.setType("*/*")
         intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, True)
 
         chooser = Intent.createChooser(intent, "选择TXT附件")
@@ -928,18 +931,18 @@ class NumberAnalysisRoot(BoxLayout):
             # Android 10+：使用官方 MediaStore。
             # 注意：PyJNIus访问Java嵌套类必须用 $，不能用 MediaStore.MediaColumns。
             MediaStoreDownloads = autoclass("android.provider.MediaStore$Downloads")
-            MediaStoreMediaColumns = autoclass("android.provider.MediaStore$MediaColumns")
             ContentValues = autoclass("android.content.ContentValues")
             FileInputStream = autoclass("java.io.FileInputStream")
             FileUtils = autoclass("android.os.FileUtils")
 
             resolver = activity.getContentResolver()
 
+            # 直接使用 Android ContentResolver 的标准列名，避免不同ROM下嵌套类常量反射失败。
             values = ContentValues()
-            values.put(MediaStoreMediaColumns.DISPLAY_NAME, filename)
-            values.put(MediaStoreMediaColumns.MIME_TYPE, "text/plain")
+            values.put("_display_name", filename)
+            values.put("mime_type", "text/plain")
             values.put(
-                MediaStoreMediaColumns.RELATIVE_PATH,
+                "relative_path",
                 Environment.DIRECTORY_DOWNLOADS + "/数字分析工具"
             )
 
