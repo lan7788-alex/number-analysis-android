@@ -14,6 +14,7 @@ from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
+from kivy.utils import platform
 
 ALL_NUMBERS = [f"{i:03d}" for i in range(1000)]
 SIZE_SHAPES = ["大大大", "大大小", "大小大", "大小小", "小大大", "小大小", "小小大", "小小小"]
@@ -327,11 +328,14 @@ class NumberAnalysisRoot(BoxLayout):
         self.add_widget(self.result)
 
         exportrow = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
-        bexport = Button(text="导出当前结果TXT")
-        bexport.bind(on_release=self.export_results)
+        bexport_app = Button(text="导出App目录")
+        bexport_app.bind(on_release=self.export_results)
+        bexport_download = Button(text="保存到下载")
+        bexport_download.bind(on_release=self.export_results_to_download)
         bclear = Button(text="清空")
         bclear.bind(on_release=self.clear_all)
-        exportrow.add_widget(bexport)
+        exportrow.add_widget(bexport_app)
+        exportrow.add_widget(bexport_download)
         exportrow.add_widget(bclear)
         self.add_widget(exportrow)
 
@@ -422,6 +426,94 @@ class NumberAnalysisRoot(BoxLayout):
                 f.write(text)
             written.append(path)
         self.result.text += "\n\n已导出：\n" + "\n".join(written)
+
+    def _export_items(self):
+        """Return [(filename, text), ...] for the current results."""
+        items = []
+        for name, values in self.current_exports.items():
+            safe = re.sub(r'[\\/:*?"<>|]', "_", name)
+            filename = safe + ".txt"
+            content = values if isinstance(values, str) else format_txt(values)
+            items.append((filename, content))
+        return items
+
+    def _save_android_download(self, filename, content):
+        """Save one TXT into the public Download/数字分析工具 folder on Android."""
+        from jnius import autoclass
+
+        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+        BuildVersion = autoclass("android.os.Build$VERSION")
+        Environment = autoclass("android.os.Environment")
+
+        activity = PythonActivity.mActivity
+
+        if BuildVersion.SDK_INT >= 29:
+            MediaStore = autoclass("android.provider.MediaStore")
+            ContentValues = autoclass("android.content.ContentValues")
+            JavaString = autoclass("java.lang.String")
+
+            resolver = activity.getContentResolver()
+            values = ContentValues()
+            values.put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+            values.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+            values.put(
+                MediaStore.MediaColumns.RELATIVE_PATH,
+                Environment.DIRECTORY_DOWNLOADS + "/数字分析工具"
+            )
+
+            uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            if uri is None:
+                raise RuntimeError("Android MediaStore 无法创建下载文件")
+
+            stream = resolver.openOutputStream(uri)
+            if stream is None:
+                raise RuntimeError("Android 无法打开下载文件输出流")
+
+            # UTF-8 BOM，兼容手机和 Windows 文本工具。
+            java_text = JavaString("\ufeff" + content)
+            stream.write(java_text.getBytes("UTF-8"))
+            stream.flush()
+            stream.close()
+            return "Download/数字分析工具/" + filename
+
+        # Android 8/9 fallback.
+        base = Environment.getExternalStoragePublicDirectory(
+            Environment.DIRECTORY_DOWNLOADS
+        ).getAbsolutePath()
+        folder = os.path.join(base, "数字分析工具")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, filename)
+        with open(path, "w", encoding="utf-8-sig") as f:
+            f.write(content)
+        return path
+
+    def export_results_to_download(self, *_):
+        if not self.current_exports:
+            self.result.text += "\n\n没有可保存的结果。"
+            return
+
+        if platform != "android":
+            self.result.text += "\n\n“保存到下载”仅在 Android APK 中使用。"
+            return
+
+        written = []
+        failed = []
+        for filename, content in self._export_items():
+            try:
+                written.append(self._save_android_download(filename, content))
+            except Exception as e:
+                failed.append(f"{filename}：{e}")
+
+        if written:
+            self.result.text += (
+                "\n\n已保存到手机“下载”目录：\n"
+                + "\n".join(written)
+            )
+        if failed:
+            self.result.text += (
+                "\n\n以下文件保存失败：\n"
+                + "\n".join(failed)
+            )
 
     def run_analysis(self, *_):
         mode = self.mode.text
