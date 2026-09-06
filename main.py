@@ -60,8 +60,17 @@ def repeat_type(num):
 
 
 def allowed_shapes(mother_shape, position_name, all_shapes):
+    # 保留原逻辑，供已经核对无误的其他功能继续使用。
     pos = POSITION_MAP[position_name]
     return [s for s in all_shapes if not all(s[p] == mother_shape[p] for p in pos)]
+
+
+def allowed_shapes_normal(mother_shape, position_name, all_shapes):
+    """口径1正常取号：保留母号自身形态，排除指定两位均为相反属性的2个形态。"""
+    pos = POSITION_MAP[position_name]
+    opposite = {"大": "小", "小": "大", "奇": "偶", "偶": "奇"}
+    target = {p: opposite[mother_shape[p]] for p in pos}
+    return [s for s in all_shapes if not all(s[p] == target[p] for p in pos)]
 
 
 def normalize_rule_text(text):
@@ -94,6 +103,25 @@ def run_koujing1(mother, size_pos, parity_pos):
     ms, mp = size_shape(mother), parity_shape(mother)
     asize = allowed_shapes(ms, size_pos, SIZE_SHAPES)
     apar = allowed_shapes(mp, parity_pos, PARITY_SHAPES)
+    full = [n for n in ALL_NUMBERS if size_shape(n) in asize and parity_shape(n) in apar]
+    same23 = [n for n in full if repeat_type(n) != "三不同"]
+    different = [n for n in full if repeat_type(n) == "三不同"]
+    return {
+        "mother_size": ms,
+        "mother_parity": mp,
+        "allowed_size": asize,
+        "allowed_parity": apar,
+        "full": sorted(full),
+        "same23": sorted(same23),
+        "different": sorted(different),
+    }
+
+
+def run_koujing1_normal(mother, size_pos, parity_pos):
+    """仅用于“口径1取号”菜单的正常取号逻辑。"""
+    ms, mp = size_shape(mother), parity_shape(mother)
+    asize = allowed_shapes_normal(ms, size_pos, SIZE_SHAPES)
+    apar = allowed_shapes_normal(mp, parity_pos, PARITY_SHAPES)
     full = [n for n in ALL_NUMBERS if size_shape(n) in asize and parity_shape(n) in apar]
     same23 = [n for n in full if repeat_type(n) != "三不同"]
     different = [n for n in full if repeat_type(n) == "三不同"]
@@ -350,7 +378,7 @@ class NumberAnalysisRoot(BoxLayout):
             p, err = parse_koujing1(line)
             if err:
                 out.append(f"{line}：{err}"); continue
-            r = run_koujing1(p["mother"], p["size_pos"], p["parity_pos"])
+            r = run_koujing1_normal(p["mother"], p["size_pos"], p["parity_pos"])
             out += [
                 f"【{line}】",
                 f"母号大小：{r['mother_size']}  母号奇偶：{r['mother_parity']}",
