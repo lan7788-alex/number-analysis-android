@@ -4,10 +4,10 @@ package.name = numberanalysis
 package.domain = org.lan7788alex
 source.dir = .
 source.include_exts = py,txt,png,jpg,kv,atlas,ttf,otf,ttc
-version = 1.4
+version = 1.5
 
 # Python/Kivy：固定到 p4a 2024.01.21 对应的 Python 3.11 体系
-requirements = python3==3.11.9,hostpython3==3.11.9,kivy==2.3.0
+requirements = python3==3.11.9,hostpython3==3.11.9,kivy==2.3.0,pyjnius
 
 orientation = portrait
 fullscreen = 0
@@ -26,7 +26,7 @@ p4a.branch = v2024.01.21
 p4a.bootstrap = sdl2
 
 # 离线软件，不申请联网权限
-android.permissions =
+android.permissions = WRITE_EXTERNAL_STORAGE
 
 [buildozer]
 log_level = 2
