@@ -3,6 +3,7 @@ import re
 from itertools import combinations
 
 from kivy.app import App
+from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.lang import Builder
 from kivy.metrics import dp
@@ -337,40 +338,44 @@ class NumberAnalysisRoot(BoxLayout):
         self.add_widget(self.summary)
 
         chooserow = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
-        self.result_selector = Spinner(text="选择结果", values=(), size_hint_x=0.62)
+        self.result_selector = Spinner(text="选择结果", values=(), size_hint_x=0.68)
         self.result_selector.bind(text=self.on_result_selected)
-        self.prev_btn = Button(text="上一页", size_hint_x=0.19)
-        self.next_btn = Button(text="下一页", size_hint_x=0.19)
-        self.prev_btn.bind(on_release=self.prev_page)
-        self.next_btn.bind(on_release=self.next_page)
+        bview = Button(text="全屏查看", size_hint_x=0.32)
+        bview.bind(on_release=self.open_full_result)
         chooserow.add_widget(self.result_selector)
-        chooserow.add_widget(self.prev_btn)
-        chooserow.add_widget(self.next_btn)
+        chooserow.add_widget(bview)
         self.add_widget(chooserow)
 
-        self.page_label = Label(text="", size_hint_y=None, height=dp(32), halign="left", valign="middle")
+        self.page_label = Label(text="", size_hint_y=None, height=dp(38), halign="left", valign="middle")
         self.page_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
         self.add_widget(self.page_label)
 
         self.result = TextInput(
             readonly=True,
             multiline=True,
-            size_hint_y=1,
-            hint_text="完整组合在这里分页显示，每页最多100注（10注一行）"
+            size_hint_y=None,
+            height=dp(360),
+            hint_text="选择结果后，这里显示完整组合（10注一行，可上下滚动）"
         )
         self.add_widget(self.result)
 
-        exportrow = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
-        bexport_app = Button(text="导出App目录")
+        exportrow1 = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
+        bcurrent = Button(text="保存当前到下载")
+        bcurrent.bind(on_release=self.export_current_to_download)
+        ball = Button(text="保存全部到下载")
+        ball.bind(on_release=self.export_results_to_download)
+        exportrow1.add_widget(bcurrent)
+        exportrow1.add_widget(ball)
+        self.add_widget(exportrow1)
+
+        exportrow2 = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
+        bexport_app = Button(text="导出全部到App目录")
         bexport_app.bind(on_release=self.export_results)
-        bexport_download = Button(text="保存到下载")
-        bexport_download.bind(on_release=self.export_results_to_download)
         bclear = Button(text="清空")
         bclear.bind(on_release=self.clear_all)
-        exportrow.add_widget(bexport_app)
-        exportrow.add_widget(bexport_download)
-        exportrow.add_widget(bclear)
-        self.add_widget(exportrow)
+        exportrow2.add_widget(bexport_app)
+        exportrow2.add_widget(bclear)
+        self.add_widget(exportrow2)
 
         self.on_mode_change(self.mode, self.mode.text)
 
@@ -487,67 +492,84 @@ class NumberAnalysisRoot(BoxLayout):
             return vals if vals else [values]
         return list(values)
 
+    def _show_message(self, title, message):
+        box = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8))
+        lab = Label(text=message, halign="left", valign="top")
+        lab.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
+        box.add_widget(lab)
+        close = Button(text="确定", size_hint_y=None, height=dp(48))
+        box.add_widget(close)
+        pop = Popup(title=title, content=box, size_hint=(0.92, 0.55))
+        close.bind(on_release=lambda *_: pop.dismiss())
+        pop.open()
+
+    def _scroll_result_top(self, *_):
+        try:
+            self.result.cursor = (0, 0)
+            self.result.scroll_x = 0
+            self.result.scroll_y = 0
+        except Exception:
+            pass
+
     def set_exports(self, **named):
         self.current_exports = named
         names = list(named.keys())
         self.result_selector.values = names
-        self.current_page = 0
         if names:
             self.current_view_name = names[0]
             self.result_selector.text = names[0]
-            self.render_current_page()
+            self.show_result(names[0])
         else:
             self.current_view_name = None
             self.result_selector.text = "选择结果"
             self.page_label.text = ""
 
     def on_result_selected(self, _spinner, name):
-        if name not in self.current_exports:
-            return
-        self.current_view_name = name
-        self.current_page = 0
-        self.render_current_page()
+        if name in self.current_exports:
+            self.current_view_name = name
+            self.show_result(name)
 
-    def render_current_page(self):
+    def show_result(self, name):
+        values = self.current_exports.get(name, [])
+        if isinstance(values, str):
+            body = values
+            vals = re.findall(r"(?<!\d)(?:\d{2}|\d{3})(?!\d)", values)
+            count = len(vals) if vals else 0
+            unit = "组" if vals and all(len(x) == 2 for x in vals) else "注"
+        else:
+            vals = sorted(set(values))
+            body = ("\n".join(" ".join(vals[i:i+10]) for i in range(0, len(vals), 10))) if vals else "（无）"
+            count = len(vals)
+            unit = "组" if vals and all(len(x) == 2 for x in vals) else "注"
+        self.result.text = body
+        self.page_label.text = f"{name}｜共 {count} {unit}｜完整显示，可上下滚动"
+        Clock.schedule_once(self._scroll_result_top, 0)
+
+    def open_full_result(self, *_):
         name = self.current_view_name
         if not name or name not in self.current_exports:
+            self._show_message("提示", "请先选择一个结果。")
             return
-        vals = self._normalize_export_values(self.current_exports[name])
-        total = len(vals)
-        if total == 0:
-            self.result.text = "（无）"
-            self.page_label.text = f"{name}｜0 注"
-            return
-        pages = (total + self.page_size - 1) // self.page_size
-        self.current_page = max(0, min(self.current_page, pages - 1))
-        start = self.current_page * self.page_size
-        end = min(start + self.page_size, total)
-        page_vals = vals[start:end]
-        self.result.text = format_txt(page_vals)
-        self.page_label.text = (
-            f"{name}｜共 {total}｜第 {self.current_page + 1}/{pages} 页｜"
-            f"当前显示 {start + 1}-{end}"
-        )
-        try:
-            self.result.cursor = (0, 0)
-            self.result.scroll_y = 0
-            self.result.scroll_x = 0
-        except Exception:
-            pass
-
-    def prev_page(self, *_):
-        if self.current_page > 0:
-            self.current_page -= 1
-            self.render_current_page()
-
-    def next_page(self, *_):
-        if not self.current_view_name or self.current_view_name not in self.current_exports:
-            return
-        vals = self._normalize_export_values(self.current_exports[self.current_view_name])
-        pages = max(1, (len(vals) + self.page_size - 1) // self.page_size)
-        if self.current_page + 1 < pages:
-            self.current_page += 1
-            self.render_current_page()
+        values = self.current_exports[name]
+        if isinstance(values, str):
+            body = values
+        else:
+            vals = sorted(set(values))
+            body = "\n".join(" ".join(vals[i:i+10]) for i in range(0, len(vals), 10))
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(6))
+        txt = TextInput(text=body, readonly=True, multiline=True)
+        box.add_widget(txt)
+        close = Button(text="关闭", size_hint_y=None, height=dp(48))
+        box.add_widget(close)
+        pop = Popup(title=name, content=box, size_hint=(0.97, 0.95))
+        close.bind(on_release=lambda *_: pop.dismiss())
+        pop.open()
+        def top(*_):
+            try:
+                txt.cursor=(0,0); txt.scroll_x=0; txt.scroll_y=0
+            except Exception:
+                pass
+        Clock.schedule_once(top, 0.1)
 
     def export_results(self, *_):
         if not self.current_exports:
@@ -563,7 +585,7 @@ class NumberAnalysisRoot(BoxLayout):
             with open(path, "w", encoding="utf-8-sig") as f:
                 f.write(text)
             written.append(path)
-        self.result.text += "\n\n已导出：\n" + "\n".join(written)
+        self._show_message("导出完成", "已导出到App目录：\n" + "\n".join(written))
 
     def _export_items(self):
         """Return [(filename, text), ...] for the current results."""
@@ -625,33 +647,43 @@ class NumberAnalysisRoot(BoxLayout):
             f.write(content)
         return path
 
+    def export_current_to_download(self, *_):
+        name = self.current_view_name
+        if not name or name not in self.current_exports:
+            self._show_message("提示", "请先选择要保存的结果。")
+            return
+        if platform != "android":
+            self._show_message("提示", "保存到下载仅在Android APK中使用。")
+            return
+        values = self.current_exports[name]
+        safe = re.sub(r'[\\/:*?"<>|]', "_", name)
+        filename = safe + ".txt"
+        content = values if isinstance(values, str) else format_txt(values)
+        try:
+            path = self._save_android_download(filename, content)
+            self._show_message("保存成功", "已保存：\n" + path)
+        except Exception as e:
+            self._show_message("保存失败", str(e))
+
     def export_results_to_download(self, *_):
         if not self.current_exports:
-            self.result.text += "\n\n没有可保存的结果。"
+            self._show_message("提示", "没有可保存的结果。")
             return
-
         if platform != "android":
-            self.result.text += "\n\n“保存到下载”仅在 Android APK 中使用。"
+            self._show_message("提示", "保存到下载仅在Android APK中使用。")
             return
-
-        written = []
-        failed = []
+        written, failed = [], []
         for filename, content in self._export_items():
             try:
                 written.append(self._save_android_download(filename, content))
             except Exception as e:
                 failed.append(f"{filename}：{e}")
-
+        msg = ""
         if written:
-            self.result.text += (
-                "\n\n已保存到手机“下载”目录：\n"
-                + "\n".join(written)
-            )
+            msg += "已保存到 Download/数字分析工具：\n" + "\n".join(written)
         if failed:
-            self.result.text += (
-                "\n\n以下文件保存失败：\n"
-                + "\n".join(failed)
-            )
+            msg += "\n\n保存失败：\n" + "\n".join(failed)
+        self._show_message("保存结果", msg or "没有生成文件。")
 
     def run_analysis(self, *_):
         mode = self.mode.text
@@ -670,8 +702,9 @@ class NumberAnalysisRoot(BoxLayout):
             raw = self.result.text
             self.summary.text = self._summary_only(raw)
             if self.current_exports:
-                # set_exports 已建立完整结果列表，重新渲染当前首项，防止旧长文本覆盖。
-                self.render_current_page()
+                # set_exports 已建立完整结果列表；显示当前选择的完整结果。
+                if self.current_view_name:
+                    self.show_result(self.current_view_name)
             else:
                 # 错误提示等没有导出结果的情况，直接显示。
                 self.result.text = raw
@@ -1130,7 +1163,11 @@ class NumberAnalysisRoot(BoxLayout):
 class NumberAnalysisApp(App):
     def build(self):
         self.title = "数字分析工具"
-        return NumberAnalysisRoot()
+        content = NumberAnalysisRoot(size_hint_y=None)
+        content.bind(minimum_height=content.setter("height"))
+        scroller = ScrollView(do_scroll_x=False, do_scroll_y=True)
+        scroller.add_widget(content)
+        return scroller
 
 
 if __name__ == "__main__":
