@@ -8,10 +8,9 @@ on:
 
 jobs:
   build:
-   runs-on: ubuntu-22.04
-
+    runs-on: ubuntu-22.04
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -22,34 +21,16 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            git \
-            zip \
-            unzip \
-            autoconf \
-            automake \
-            libtool \
-            pkg-config \
-            zlib1g-dev \
-            libncurses-dev \
-            cmake \
-            libffi-dev \
-            libssl-dev \
-            openjdk-17-jdk
-
-          python -m pip install --upgrade pip
-          pip install buildozer cython
-
-      - name: Build APK
+          sudo apt-get install -y git zip unzip autoconf automake libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev openjdk-17-jdk gettext python -m pip install --upgrade pip setuptools wheel pip install "cython<3" buildozer - name: Build APK
         run: |
           set -o pipefail
           buildozer -v android debug 2>&1 | tee build.log
 
-      - name: Show last build log
+      - name: Show last 250 build log lines
         if: always()
         run: |
-          echo "===== LAST 200 LINES OF BUILD LOG ====="
-          tail -n 200 build.log || true
+          echo "===== LAST 250 LINES OF BUILD LOG ====="
+          tail -n 250 build.log || true
 
       - name: Upload build log
         if: always()
@@ -57,10 +38,11 @@ jobs:
         with:
           name: build-log
           path: build.log
+          if-no-files-found: ignore
 
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: number-analysis-android-apk
-          path: bin/*.apk
+          path: bin/*.apk if-no-files-found: error
