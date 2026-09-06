@@ -4,6 +4,7 @@ from itertools import combinations
 
 from kivy.app import App
 from kivy.clock import Clock
+from kivy.core.clipboard import Clipboard
 from kivy.core.window import Window
 from kivy.lang import Builder
 from kivy.metrics import dp
@@ -385,6 +386,15 @@ class NumberAnalysisRoot(BoxLayout):
         )
         self.add_widget(self.result)
 
+        copy_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        bcopy = Button(text="复制当前结果")
+        bcopy.bind(on_release=self.copy_current_result)
+        bcopyall = Button(text="复制全部结果")
+        bcopyall.bind(on_release=self.copy_all_results)
+        copy_row.add_widget(bcopy)
+        copy_row.add_widget(bcopyall)
+        self.add_widget(copy_row)
+
         save_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
         bcurrent = Button(text="保存当前到下载")
         bcurrent.bind(on_release=self.export_current_to_download)
@@ -606,10 +616,15 @@ class NumberAnalysisRoot(BoxLayout):
     def set_exports(self, **named):
         # do_* 在调用本方法前，self.result.text 中已经写好了统计、闭环和组合。
         raw = self.result.text
-        self.summary.text = self._summary_only(raw)
-
         self.current_exports = named
         names = list(named.keys())
+
+        summary = self._summary_only(raw)
+        if names:
+            result_list = "\n".join(f"{i+1}. {name}" for i, name in enumerate(names))
+            summary = (summary + "\n\n可查看/保存的结果：\n" + result_list).strip()
+        self.summary.text = summary
+
         self.result_selector.values = names
 
         if names:
@@ -702,54 +717,116 @@ class NumberAnalysisRoot(BoxLayout):
         return items
 
     def _save_android_download(self, filename, content):
-        """Save one TXT into the public Download/数字分析工具 folder on Android."""
+        """稳定保存TXT到公共 Download/数字分析工具 目录。"""
         from jnius import autoclass
 
         PythonActivity = autoclass("org.kivy.android.PythonActivity")
         BuildVersion = autoclass("android.os.Build$VERSION")
         Environment = autoclass("android.os.Environment")
-
         activity = PythonActivity.mActivity
 
+        # 先在App私有目录生成一个临时TXT，确保Python写文件本身稳定。
+        cache_dir = os.path.join(App.get_running_app().user_data_dir, "export_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        private_file = os.path.join(cache_dir, filename)
+        with open(private_file, "w", encoding="utf-8-sig") as f:
+            f.write(content)
+
         if BuildVersion.SDK_INT >= 29:
-            MediaStore = autoclass("android.provider.MediaStore")
+            # Android 10+：使用官方 MediaStore。
+            # 注意：PyJNIus访问Java嵌套类必须用 $，不能用 MediaStore.MediaColumns。
+            MediaStoreDownloads = autoclass("android.provider.MediaStore$Downloads")
+            MediaStoreMediaColumns = autoclass("android.provider.MediaStore$MediaColumns")
             ContentValues = autoclass("android.content.ContentValues")
-            JavaString = autoclass("java.lang.String")
+            FileInputStream = autoclass("java.io.FileInputStream")
+            FileUtils = autoclass("android.os.FileUtils")
 
             resolver = activity.getContentResolver()
+
             values = ContentValues()
-            values.put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-            values.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+            values.put(MediaStoreMediaColumns.DISPLAY_NAME, filename)
+            values.put(MediaStoreMediaColumns.MIME_TYPE, "text/plain")
             values.put(
-                MediaStore.MediaColumns.RELATIVE_PATH,
+                MediaStoreMediaColumns.RELATIVE_PATH,
                 Environment.DIRECTORY_DOWNLOADS + "/数字分析工具"
             )
 
-            uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            uri = resolver.insert(MediaStoreDownloads.EXTERNAL_CONTENT_URI, values)
             if uri is None:
-                raise RuntimeError("Android MediaStore 无法创建下载文件")
+                raise RuntimeError("无法在手机下载目录创建TXT文件")
 
-            stream = resolver.openOutputStream(uri)
-            if stream is None:
-                raise RuntimeError("Android 无法打开下载文件输出流")
+            out_stream = resolver.openOutputStream(uri)
+            if out_stream is None:
+                raise RuntimeError("无法打开手机下载文件")
 
-            # UTF-8 BOM，兼容手机和 Windows 文本工具。
-            java_text = JavaString("\ufeff" + content)
-            stream.write(java_text.getBytes("UTF-8"))
-            stream.flush()
-            stream.close()
+            in_stream = FileInputStream(private_file)
+            try:
+                FileUtils.copy(in_stream, out_stream)
+                out_stream.flush()
+            finally:
+                try:
+                    in_stream.close()
+                except Exception:
+                    pass
+                try:
+                    out_stream.close()
+                except Exception:
+                    pass
+
             return "Download/数字分析工具/" + filename
 
-        # Android 8/9 fallback.
+        # Android 9及以下：直接写公共Download目录。
         base = Environment.getExternalStoragePublicDirectory(
             Environment.DIRECTORY_DOWNLOADS
         ).getAbsolutePath()
         folder = os.path.join(base, "数字分析工具")
         os.makedirs(folder, exist_ok=True)
-        path = os.path.join(folder, filename)
-        with open(path, "w", encoding="utf-8-sig") as f:
-            f.write(content)
-        return path
+        public_file = os.path.join(folder, filename)
+
+        with open(private_file, "rb") as src_f, open(public_file, "wb") as dst_f:
+            dst_f.write(src_f.read())
+
+        return public_file
+
+    def _clipboard_copy(self, text):
+        if not text:
+            self._show_message("复制失败", "当前没有可复制的内容。")
+            return
+        try:
+            Clipboard.copy(text)
+            self._show_message("复制成功", "结果已经复制到系统剪贴板。")
+        except Exception as e:
+            self._show_message("复制失败", str(e))
+
+    def copy_current_result(self, *_):
+        name = self.current_view_name
+        if not name or name not in self.current_exports:
+            self._show_message("复制失败", "请先选择一个结果。")
+            return
+
+        values = self.current_exports[name]
+        if isinstance(values, str):
+            body = values
+        else:
+            body = format_txt(values)
+
+        text = f"【{name}】\\n{body}"
+        self._clipboard_copy(text)
+
+    def copy_all_results(self, *_):
+        if not self.current_exports:
+            self._show_message("复制失败", "当前没有可复制的结果。")
+            return
+
+        blocks = []
+        for name, values in self.current_exports.items():
+            if isinstance(values, str):
+                body = values
+            else:
+                body = format_txt(values)
+            blocks.append(f"【{name}】\\n{body}")
+
+        self._clipboard_copy("\\n\\n".join(blocks))
 
     def export_current_to_download(self, *_):
         name = self.current_view_name
