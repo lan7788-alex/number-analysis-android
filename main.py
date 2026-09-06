@@ -4,6 +4,7 @@ from itertools import combinations
 
 from kivy.app import App
 from kivy.core.window import Window
+from kivy.lang import Builder
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
@@ -18,6 +19,57 @@ ALL_NUMBERS = [f"{i:03d}" for i in range(1000)]
 SIZE_SHAPES = ["大大大", "大大小", "大小大", "大小小", "小大大", "小大小", "小小大", "小小小"]
 PARITY_SHAPES = ["奇奇奇", "奇奇偶", "奇偶奇", "奇偶偶", "偶奇奇", "偶奇偶", "偶偶奇", "偶偶偶"]
 POSITION_MAP = {"百十": [0, 1], "百个": [0, 2], "十个": [1, 2]}
+
+
+def find_chinese_font():
+    """优先使用项目内置中文字体；没有时自动使用 Android 系统中文字体。"""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(base_dir, "fonts", "chinese.ttf"),
+        os.path.join(base_dir, "fonts", "chinese.otf"),
+        "/system/fonts/NotoSansCJK-Regular.ttc",
+        "/system/fonts/NotoSansCJKsc-Regular.otf",
+        "/system/fonts/NotoSansSC-Regular.otf",
+        "/system/fonts/DroidSansFallback.ttf",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+
+    # 不同品牌 Android 的字体文件名可能略有差异，继续自动扫描。
+    system_font_dir = "/system/fonts"
+    if os.path.isdir(system_font_dir):
+        try:
+            names = os.listdir(system_font_dir)
+            priority = ("NotoSansCJK", "NotoSansSC", "DroidSansFallback", "NotoSerifCJK")
+            for key in priority:
+                for name in names:
+                    low = name.lower()
+                    if key.lower() in low and low.endswith((".ttf", ".otf", ".ttc")):
+                        return os.path.join(system_font_dir, name)
+        except Exception:
+            pass
+
+    return "Roboto"
+
+
+CHINESE_FONT = find_chinese_font()
+
+# 给整个 Kivy 界面统一指定中文字体：标题、按钮、下拉框、输入框、弹窗等都会生效。
+if CHINESE_FONT != "Roboto":
+    _font = CHINESE_FONT.replace("\\", "/")
+    Builder.load_string(f"""
+<Label>:
+    font_name: "{_font}"
+<Button>:
+    font_name: "{_font}"
+<Spinner>:
+    font_name: "{_font}"
+<TextInput>:
+    font_name: "{_font}"
+<Popup>:
+    title_font: "{_font}"
+""")
 
 MODES = [
     "口径1取号",
