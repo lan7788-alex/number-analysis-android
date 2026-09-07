@@ -297,7 +297,12 @@ class NumberAnalysisRoot(BoxLayout):
         super().__init__(orientation="vertical", spacing=dp(6), padding=dp(6), **kwargs)
 
         self.loaded_files = []
-        self._selected_uri_keys = set()
+        self.file_A = None
+        self.file_B = None
+        self.file_single = None
+        self.file_others = []
+        self._append_uri_keys = set()
+        self._picker_target = "single"
         self.current_exports = {}
         self.current_view_name = None
 
@@ -336,19 +341,31 @@ class NumberAnalysisRoot(BoxLayout):
         self.add_widget(self.input2)
         self.add_widget(self.input3)
 
-        self.file_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
-        bload = Button(text="选择TXT附件", size_hint_x=0.38)
-        bload.bind(on_release=self.open_files)
+        self.file_row = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            height=dp(96),
+            spacing=dp(4)
+        )
+
+        self.file_button_row = BoxLayout(
+            size_hint_y=None,
+            height=dp(46),
+            spacing=dp(6)
+        )
+        self.file_row.add_widget(self.file_button_row)
+
         self.files_label = Label(
             text="未选择附件",
             halign="left",
             valign="middle",
-            size_hint_x=0.62
+            size_hint_y=None,
+            height=dp(46),
+            font_size="13sp"
         )
         self.files_label.bind(
-            size=lambda inst, val: setattr(inst, "text_size", (val[0], None))
+            size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1]))
         )
-        self.file_row.add_widget(bload)
         self.file_row.add_widget(self.files_label)
         self.add_widget(self.file_row)
 
@@ -408,12 +425,11 @@ class NumberAnalysisRoot(BoxLayout):
         self.on_mode_change(self.mode, self.mode.text)
 
 
+
     def on_mode_change(self, _spinner, mode):
-        self.loaded_files = []
-        self._selected_uri_keys = set()
+        self._reset_file_roles()
         self.current_exports = {}
         self.current_view_name = None
-        self.files_label.text = "未选择附件"
         self.summary.text = ""
         self.result.text = ""
         self.result_selector.values = ()
@@ -488,7 +504,7 @@ class NumberAnalysisRoot(BoxLayout):
             ),
             "三至七位拆两位组合": (
                 1, False,
-                "输入3-7位数字，可多组，例如：345 4567 124579",
+                "输入3-7位数字，可多组；最终只输出全部合并去重结果",
                 "", ""
             ),
             "半顺以上筛选": (
@@ -498,18 +514,21 @@ class NumberAnalysisRoot(BoxLayout):
         }
 
         input_count, need_file, h1, h2, h3 = config[mode]
+
         extra = ""
         if mode == "交集 / 不交集":
-            extra = " 需要2个附件。可一次多选；若系统选1个就返回，再点一次‘选择TXT附件’即可累计。第1个=A，第2个=B。"
+            extra = " 请分别点“选择A附件”和“选择B附件”，不再依赖上传顺序。"
         elif mode == "A分别与多个文件交集":
-            extra = " 第1个文件作为A，其余作为B/C/D…；可多次点‘选择TXT附件’持续累计。"
+            extra = " 先点“选择A附件”，再点“添加B/C/D附件”；程序会明确标出每个角色。"
         elif mode == "合并去重":
-            extra = " 至少需要2个附件；可一次多选，也可多次点‘选择TXT附件’持续累计。"
+            extra = " 直接添加2个以上附件即可，不区分A/B/C角色。"
+
         self.instructions.text = (
             "本次只使用当前输入和当前附件，不调用旧数据。"
-            + (" 需要附件时点‘选择TXT附件’。" if need_file else "")
+            + (" 需要附件时请在下面选择。" if need_file else "")
             + extra
         )
+
         hints = [h1, h2, h3]
         widgets = [self.input1, self.input2, self.input3]
 
@@ -520,18 +539,16 @@ class NumberAnalysisRoot(BoxLayout):
             widget.opacity = 1 if show else 0
             widget.disabled = not show
 
-        self.file_row.height = dp(46) if need_file else 0
-        self.file_row.opacity = 1 if need_file else 0
-        self.file_row.disabled = not need_file
+        self._configure_file_controls(mode, need_file)
+
 
 
     def clear_all(self, *_):
         self.input1.text = ""
         self.input2.text = ""
         self.input3.text = ""
-        self.loaded_files = []
-        self._selected_uri_keys = set()
-        self.files_label.text = "未选择附件"
+        self._reset_file_roles()
+        self._configure_file_controls(self.mode.text, True)
         self.summary.text = ""
         self.result.text = ""
         self.current_exports = {}
@@ -540,59 +557,175 @@ class NumberAnalysisRoot(BoxLayout):
         self.result_selector.text = "选择查看结果"
 
 
+
     def open_files(self, *_):
         """
-        附件选择统一规则：
-        - 交集/不交集：需要2个，支持一次多选，也支持分两次逐个选择并累计。
-        - A分别与多个文件交集：第1个为A，后续B/C/D…，可反复选择累计。
-        - 合并去重：需要2个以上，可反复选择累计。
-        - 其他附件类功能：只需要1个，新选择的附件替换旧附件。
+        兼容入口：
+        - 交集/不交集：缺A先选A，缺B再选B
+        - A分别与多个文件交集：缺A先选A，否则追加B/C/D
+        - 合并去重：追加附件
+        - 其他附件功能：选择单个附件
         """
+        mode = self.mode.text
+        if mode == "交集 / 不交集":
+            target = "A" if self.file_A is None else "B"
+        elif mode == "A分别与多个文件交集":
+            target = "A" if self.file_A is None else "others"
+        elif mode == "合并去重":
+            target = "append"
+        else:
+            target = "single"
+        self.select_file_role(target)
+
+
+
+
+    def _reset_file_roles(self):
+        self.loaded_files = []
+        self.file_A = None
+        self.file_B = None
+        self.file_single = None
+        self.file_others = []
+        self._append_uri_keys = set()
+        self._picker_target = "single"
+        self.files_label.text = "未选择附件"
+
+    def _sync_loaded_files(self):
+        mode = self.mode.text
+
+        if mode == "交集 / 不交集":
+            self.loaded_files = [
+                p for p in (self.file_A, self.file_B)
+                if p is not None
+            ]
+            return
+
+        if mode == "A分别与多个文件交集":
+            self.loaded_files = (
+                ([self.file_A] if self.file_A else [])
+                + list(self.file_others)
+            )
+            return
+
+        if mode == "合并去重":
+            self.loaded_files = list(self.file_others)
+            return
+
+        self.loaded_files = [self.file_single] if self.file_single else []
+
+    def _configure_file_controls(self, mode, need_file):
+        self.file_button_row.clear_widgets()
+
+        if not need_file:
+            self.file_row.height = 0
+            self.file_row.opacity = 0
+            self.file_row.disabled = True
+            return
+
+        self.file_row.height = dp(96)
+        self.file_row.opacity = 1
+        self.file_row.disabled = False
+
+        if mode == "交集 / 不交集":
+            ba = Button(text="选择A附件")
+            bb = Button(text="选择B附件")
+            ba.bind(on_release=lambda *_: self.select_file_role("A"))
+            bb.bind(on_release=lambda *_: self.select_file_role("B"))
+            self.file_button_row.add_widget(ba)
+            self.file_button_row.add_widget(bb)
+
+        elif mode == "A分别与多个文件交集":
+            ba = Button(text="选择A附件")
+            bothers = Button(text="添加B/C/D附件")
+            ba.bind(on_release=lambda *_: self.select_file_role("A"))
+            bothers.bind(on_release=lambda *_: self.select_file_role("others"))
+            self.file_button_row.add_widget(ba)
+            self.file_button_row.add_widget(bothers)
+
+        elif mode == "合并去重":
+            b = Button(text="添加附件")
+            b.bind(on_release=lambda *_: self.select_file_role("append"))
+            self.file_button_row.add_widget(b)
+
+        else:
+            b = Button(text="选择TXT附件")
+            b.bind(on_release=lambda *_: self.select_file_role("single"))
+            self.file_button_row.add_widget(b)
+
+        self._refresh_loaded_files_label()
+
+    def select_file_role(self, target):
+        self._picker_target = target
+
         if platform == "android":
             try:
                 self._open_android_file_picker()
-                return
             except Exception as e:
-                self._show_message("附件选择失败", f"无法打开系统文件选择器：\n{e}")
-                return
+                self._show_message(
+                    "附件选择失败",
+                    f"无法打开系统文件选择器：\n{e}"
+                )
+            return
 
+        self._open_desktop_file_picker(target)
+
+    def _open_desktop_file_picker(self, target):
         chooser = FileChooserListView(
             path=os.path.expanduser("~"),
             filters=["*.txt"],
-            multiselect=True
+            multiselect=target in {"others", "append"}
         )
+
         box = BoxLayout(orientation="vertical")
         box.add_widget(chooser)
+
         row = BoxLayout(size_hint_y=None, height=dp(48))
         ok = Button(text="确定")
         cancel = Button(text="取消")
         row.add_widget(ok)
         row.add_widget(cancel)
         box.add_widget(row)
-        pop = Popup(title="选择TXT附件", content=box, size_hint=(0.95, 0.9))
+
+        pop = Popup(
+            title="选择TXT附件",
+            content=box,
+            size_hint=(0.95, 0.9)
+        )
 
         def choose(*_args):
             chosen = chooser.selection[:]
-            if not chosen:
-                pop.dismiss()
-                return
-            self._apply_selected_paths(chosen)
-            self._refresh_loaded_files_label()
+            if chosen:
+                self._assign_selected_paths(target, chosen)
             pop.dismiss()
 
         ok.bind(on_release=choose)
         cancel.bind(on_release=lambda *_a: pop.dismiss())
         pop.open()
 
+    def _assign_selected_paths(self, target, paths):
+        valid = [p for p in paths if p]
+        if not valid:
+            return
+
+        if target == "A":
+            self.file_A = valid[0]
+
+        elif target == "B":
+            self.file_B = valid[0]
+
+        elif target == "single":
+            self.file_single = valid[0]
+
+        elif target in {"others", "append"}:
+            for p in valid:
+                if p not in self.file_others:
+                    self.file_others.append(p)
+
+        self._sync_loaded_files()
+        self._refresh_loaded_files_label()
 
 
     def _attachment_policy(self):
-        """
-        返回 (策略, 数量)：
-        single  = 只保留1个，新选择替换旧附件
-        exact   = 精确需要N个，逐次选择时累计到N个为止
-        minimum = 至少N个，可持续追加
-        """
         mode = self.mode.text
 
         if mode == "交集 / 不交集":
@@ -653,36 +786,30 @@ class NumberAnalysisRoot(BoxLayout):
             return f"当前已选择 {n} 个附件，可以开始分析；还可以继续追加。"
         return f"当前已选择 {n} 个附件，至少还需要 {limit - n} 个。"
 
+
     def _open_android_file_picker(self):
         from jnius import autoclass
         from android import activity as android_activity
-
-        mode = self.mode.text
-        policy, limit = self._attachment_policy()
-
-        if policy == "exact" and len(self.loaded_files) >= limit:
-            self._show_message(
-                "附件已满",
-                f"{mode}只需要 {limit} 个附件。\n"
-                "如果需要重新选择，请先点“清空”。"
-            )
-            return
 
         Intent = autoclass("android.content.Intent")
         PythonActivity = autoclass("org.kivy.android.PythonActivity")
 
         if not getattr(self, "_android_picker_bound", False):
-            android_activity.bind(on_activity_result=self._on_android_activity_result)
+            android_activity.bind(
+                on_activity_result=self._on_android_activity_result
+            )
             self._android_picker_bound = True
 
         intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
         intent.addCategory(Intent.CATEGORY_OPENABLE)
         intent.setType("text/plain")
-        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, True)
+
+        # B/C/D 和合并去重允许系统多选；
+        # A、B、单附件模式只取一个，角色最清楚。
+        allow_multiple = self._picker_target in {"others", "append"}
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, allow_multiple)
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
-        # 直接打开系统文件选择器。三星“我的文件”如果点一个文件就自动返回，
-        # 回到APP后再次点“选择TXT附件”即可，程序会累计，不会覆盖。
         PythonActivity.mActivity.startActivityForResult(intent, 9047)
 
     @mainthread
@@ -713,95 +840,107 @@ class NumberAnalysisRoot(BoxLayout):
                     uris.append(uri)
 
             if not uris:
-                self._show_message("附件选择", "没有读取到任何TXT附件。")
+                self._show_message(
+                    "附件选择",
+                    "没有读取到任何TXT附件。"
+                )
                 return
 
-            policy, limit = self._attachment_policy()
+            target = self._picker_target
+            imported = []
+            errors = []
+            skipped = 0
 
-            # 单文件功能：本次只取第一个有效附件，成功后替换旧附件。
-            if policy == "single":
-                imported = []
-                errors = []
-
+            # A/B/单附件：只使用第一个能正常读取的TXT
+            if target in {"A", "B", "single"}:
                 for i, uri in enumerate(uris, start=1):
-                    uri_key = str(uri)
                     try:
                         path = self._copy_android_uri_to_local(uri, i)
-                        imported.append(path)
-                        # 单文件只需要第一个成功的
-                        self.loaded_files = [path]
-                        self._selected_uri_keys = {uri_key}
+                        imported = [path]
                         break
                     except Exception as e:
                         errors.append(f"第{i}个附件：{e}")
 
-                self._refresh_loaded_files_label()
-
                 if imported:
-                    nums = self.read_file(imported[0])
+                    path = imported[0]
+                    if target == "A":
+                        self.file_A = path
+                        role_name = "A"
+                    elif target == "B":
+                        self.file_B = path
+                        role_name = "B"
+                    else:
+                        self.file_single = path
+                        role_name = "当前"
+
+                    self._sync_loaded_files()
+                    self._refresh_loaded_files_label()
+
+                    nums = self.read_file(path)
                     self._show_message(
                         "附件已读取",
-                        f"{os.path.basename(imported[0])}：{len(nums)}注\n\n"
-                        + self._attachment_status_text()
+                        f"{role_name}附件：{os.path.basename(path)}\n"
+                        f"识别到 {len(nums)} 注。"
                     )
                 else:
                     self._show_message(
                         "附件读取失败",
-                        "没有任何附件能够读取。\n" + "\n".join(errors)
+                        "没有任何附件能够读取。\n"
+                        + "\n".join(errors)
                     )
                 return
 
-            # 多文件功能：在已有附件基础上继续追加。
-            if policy == "exact":
-                capacity = max(0, limit - len(self.loaded_files))
-                if capacity == 0:
-                    self._show_message(
-                        "附件已满",
-                        f"已经选择 {limit} 个附件，请直接开始分析；"
-                        "如需更换请先点“清空”。"
-                    )
-                    return
-            else:
-                capacity = None
-
-            imported = []
-            errors = []
-            skipped_duplicates = 0
-
+            # B/C/D 或合并去重：允许一次或多次追加。
             for i, uri in enumerate(uris, start=1):
-                if capacity is not None and len(imported) >= capacity:
-                    break
-
                 uri_key = str(uri)
-                if uri_key in self._selected_uri_keys:
-                    skipped_duplicates += 1
+
+                if uri_key in self._append_uri_keys:
+                    skipped += 1
                     continue
 
                 try:
                     path = self._copy_android_uri_to_local(
                         uri,
-                        len(self.loaded_files) + len(imported) + 1
+                        len(self.file_others) + len(imported) + 1
                     )
                     imported.append((uri_key, path))
                 except Exception as e:
                     errors.append(f"第{i}个附件：{e}")
 
             for uri_key, path in imported:
-                self.loaded_files.append(path)
-                self._selected_uri_keys.add(uri_key)
+                self.file_others.append(path)
+                self._append_uri_keys.add(uri_key)
 
+            self._sync_loaded_files()
             self._refresh_loaded_files_label()
 
             details = []
-            for _uri_key, p in imported:
-                nums = self.read_file(p)
-                details.append(f"{os.path.basename(p)}：{len(nums)}注")
+            for _uri_key, path in imported:
+                details.append(
+                    f"{os.path.basename(path)}："
+                    f"{len(self.read_file(path))}注"
+                )
 
-            msg = self._attachment_status_text()
+            msg = ""
+            if target == "others":
+                roles = []
+                for idx, path in enumerate(self.file_others, start=1):
+                    role = chr(65 + idx)   # 1->B, 2->C, 3->D
+                    roles.append(f"{role}={os.path.basename(path)}")
+                msg = "当前角色：\n"
+                msg += (
+                    f"A={os.path.basename(self.file_A)}\n"
+                    if self.file_A else
+                    "A=未选择\n"
+                )
+                msg += "\n".join(roles) if roles else "B/C/D尚未选择"
+            else:
+                msg = f"当前已添加 {len(self.file_others)} 个附件。"
+
             if details:
                 msg += "\n\n本次新增：\n" + "\n".join(details)
-            if skipped_duplicates:
-                msg += f"\n\n已忽略重复选择 {skipped_duplicates} 个。"
+            if skipped:
+                msg += f"\n\n已忽略重复附件 {skipped} 个。"
             if errors:
                 msg += "\n\n未能读取：\n" + "\n".join(errors)
 
@@ -889,35 +1028,56 @@ class NumberAnalysisRoot(BoxLayout):
         return out_path
 
 
-    def _refresh_loaded_files_label(self):
-        if not self.loaded_files:
-            self.files_label.text = "未选择附件"
-            return
 
-        names = [os.path.basename(p) for p in self.loaded_files]
+    def _refresh_loaded_files_label(self):
         mode = self.mode.text
 
         if mode == "交集 / 不交集":
-            if len(names) == 1:
-                self.files_label.text = f"A={names[0]}；请继续选择B"
-            else:
-                self.files_label.text = f"A={names[0]}；B={names[1]}"
+            a = os.path.basename(self.file_A) if self.file_A else "未选择"
+            b = os.path.basename(self.file_B) if self.file_B else "未选择"
+            self.files_label.text = f"A={a}\nB={b}"
             return
 
         if mode == "A分别与多个文件交集":
-            if len(names) == 1:
-                self.files_label.text = f"A={names[0]}；请继续选择B/C/D…"
-            else:
-                rest = "、".join(names[1:3]) + ("…" if len(names) > 3 else "")
-                self.files_label.text = f"A={names[0]}；其余={rest}；共{len(names)}个"
+            lines = [
+                "A=" + (
+                    os.path.basename(self.file_A)
+                    if self.file_A else
+                    "未选择"
+                )
+            ]
+
+            for i, path in enumerate(self.file_others, start=1):
+                role = chr(65 + i)  # B/C/D...
+                lines.append(f"{role}={os.path.basename(path)}")
+
+            if len(lines) > 4:
+                shown = lines[:4]
+                shown.append(f"……共 {len(lines)} 个角色附件")
+                lines = shown
+
+            self.files_label.text = "；".join(lines)
             return
 
         if mode == "合并去重":
-            shown = "、".join(names[:2]) + ("…" if len(names) > 2 else "")
-            self.files_label.text = f"已选{len(names)}个：{shown}"
+            if not self.file_others:
+                self.files_label.text = "未选择附件"
+            else:
+                names = [os.path.basename(p) for p in self.file_others]
+                shown = "、".join(names[:2])
+                if len(names) > 2:
+                    shown += "……"
+                self.files_label.text = (
+                    f"已选 {len(names)} 个附件：{shown}"
+                )
             return
 
-        self.files_label.text = f"已选：{names[0]}"
+        if self.file_single:
+            self.files_label.text = (
+                "已选：" + os.path.basename(self.file_single)
+            )
+        else:
+            self.files_label.text = "未选择附件"
 
     def read_file(self, path):
         data = open(path, "rb").read()
@@ -1437,14 +1597,51 @@ class NumberAnalysisRoot(BoxLayout):
             exports[f"形态轨_出现{count}次_{len(vals)}注"] = vals
         self.set_exports(**exports)
 
+
     def need_files(self, count=None, minimum=None):
+        mode = self.mode.text
+
+        if mode == "交集 / 不交集":
+            if not self.file_A or not self.file_B:
+                self.result.text = (
+                    "请先分别选择A附件和B附件。"
+                )
+                return False
+
+        elif mode == "A分别与多个文件交集":
+            if not self.file_A or not self.file_others:
+                self.result.text = (
+                    "请先选择A附件，并至少添加1个B/C/D附件。"
+                )
+                return False
+
+        elif mode == "合并去重":
+            if len(self.file_others) < 2:
+                self.result.text = (
+                    f"至少需要2个TXT附件，目前 {len(self.file_others)} 个。"
+                )
+                return False
+
+        else:
+            if count == 1 and not self.file_single:
+                self.result.text = "请先选择1个TXT附件。"
+                return False
+
+        self._sync_loaded_files()
         n = len(self.loaded_files)
+
         if count is not None and n != count:
-            self.result.text = f"需要选择 {count} 个TXT附件，目前 {n} 个。"
+            self.result.text = (
+                f"需要选择 {count} 个TXT附件，目前 {n} 个。"
+            )
             return False
+
         if minimum is not None and n < minimum:
-            self.result.text = f"至少需要选择 {minimum} 个TXT附件，目前 {n} 个。"
+            self.result.text = (
+                f"至少需要选择 {minimum} 个TXT附件，目前 {n} 个。"
+            )
             return False
+
         return True
 
     def do_5(self):
