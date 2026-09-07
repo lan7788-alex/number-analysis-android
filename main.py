@@ -336,6 +336,26 @@ def sequence_type(num):
     return "非半顺"
 
 
+class InlineEditorProxy:
+    """
+    用主界面内嵌编辑页替代 Kivy Popup。
+
+    这样“点击设置”不再打开 ModalView/Popup，避免部分 Android/三星设备
+    上 Popup 打开迟钝、需要多次点击才看见反应的问题。
+    """
+
+    def __init__(self, owner, title, content):
+        self.owner = owner
+        self.title = title
+        self.content = content
+
+    def open(self):
+        self.owner._show_inline_editor(self.title, self.content)
+
+    def dismiss(self):
+        self.owner._hide_inline_editor()
+
+
 class NumberAnalysisRoot(BoxLayout):
 
     def __init__(self, **kwargs):
@@ -414,7 +434,11 @@ class NumberAnalysisRoot(BoxLayout):
             btn.bind(
                 size=lambda inst, val: setattr(inst, "text_size", (max(dp(10), val[0]-dp(18)), None))
             )
-            btn.bind(on_release=lambda _btn, idx=i: self.open_input_editor(idx))
+            btn.bind(
+                on_release=lambda _btn, idx=i: Clock.schedule_once(
+                    lambda _dt, j=idx: self.open_input_editor(j), 0
+                )
+            )
             self.input_buttons.append(btn)
             self.add_widget(btn)
 
@@ -517,8 +541,90 @@ class NumberAnalysisRoot(BoxLayout):
         self.add_widget(save_row)
 
         self.on_mode_change(self.mode, self.mode.text)
+        self._install_inline_editor_shell()
 
 
+
+    def _install_inline_editor_shell(self):
+        """把原主界面包成一个面板，以便设置时整页切换，不使用 Popup。"""
+        original_children = list(reversed(self.children))
+        for child in original_children:
+            self.remove_widget(child)
+
+        self.main_panel = BoxLayout(
+            orientation="vertical",
+            spacing=dp(6),
+            padding=dp(6)
+        )
+        for child in original_children:
+            self.main_panel.add_widget(child)
+
+        # 外层只负责在“主界面 / 编辑界面”之间切换。
+        self.padding = [0, 0, 0, 0]
+        self.spacing = 0
+        self._inline_editor_screen = None
+        self.add_widget(self.main_panel)
+
+    def _show_inline_editor(self, title, body):
+        """显示整页内嵌编辑器；不创建 Kivy Popup/ModalView。"""
+        if self._inline_editor_screen is not None:
+            try:
+                if self._inline_editor_screen.parent is self:
+                    self.remove_widget(self._inline_editor_screen)
+            except Exception:
+                pass
+
+        if getattr(self, "main_panel", None) is not None and self.main_panel.parent is self:
+            self.remove_widget(self.main_panel)
+
+        screen = BoxLayout(
+            orientation="vertical",
+            spacing=dp(6),
+            padding=dp(6)
+        )
+
+        top = BoxLayout(size_hint_y=None, height=dp(54), spacing=dp(6))
+        back = Button(text="返回", size_hint_x=0.28, font_size="16sp")
+        title_label = Label(
+            text=title,
+            halign="left",
+            valign="middle",
+            font_size="17sp"
+        )
+        title_label.bind(
+            size=lambda inst, val: setattr(
+                inst, "text_size", (max(dp(10), val[0] - dp(6)), None)
+            )
+        )
+        back.bind(on_release=lambda *_: self._hide_inline_editor())
+        top.add_widget(back)
+        top.add_widget(title_label)
+        screen.add_widget(top)
+
+        # 编辑器主体直接占据剩余屏幕，不经过 Popup / ScrollView。
+        try:
+            if body.parent is not None:
+                body.parent.remove_widget(body)
+        except Exception:
+            pass
+        body.size_hint = (1, 1)
+        screen.add_widget(body)
+
+        self._inline_editor_screen = screen
+        self.add_widget(screen)
+
+    def _hide_inline_editor(self):
+        """退出整页编辑器并回到主界面。"""
+        if self._inline_editor_screen is not None:
+            try:
+                if self._inline_editor_screen.parent is self:
+                    self.remove_widget(self._inline_editor_screen)
+            except Exception:
+                pass
+            self._inline_editor_screen = None
+
+        if getattr(self, "main_panel", None) is not None and self.main_panel.parent is None:
+            self.add_widget(self.main_panel)
 
     def _unfocus_inputs(self, *_):
         """主界面不再直接放可编辑 TextInput；这里只负责关闭残余键盘焦点。"""
@@ -627,13 +733,8 @@ class NumberAnalysisRoot(BoxLayout):
 
     def _popup_shell(self, title):
         """
-        创建纯按钮弹窗。
-
-        重要：这里不再使用 ScrollView。
-        Kivy ScrollView 会先截获触摸来判断用户是在滚动还是点击，
-        在部分三星手机上会让里面的按钮出现“点很多次才响应”的感觉。
-        现在按钮直接放在普通 BoxLayout 中，触摸路径和主界面的
-        “选择A附件”按钮一致。
+        兼容旧编辑器代码的接口，但不再创建 Popup。
+        所有“设置条件”页面都切换到主界面内的独立编辑页。
         """
         body = BoxLayout(
             orientation="vertical",
@@ -641,13 +742,8 @@ class NumberAnalysisRoot(BoxLayout):
             padding=[dp(5), dp(5), dp(5), dp(6)],
             size_hint=(1, 1)
         )
-        popup = Popup(
-            title=title,
-            content=body,
-            size_hint=(0.98, 0.95),
-            auto_dismiss=False
-        )
-        return popup, body
+        proxy = InlineEditorProxy(self, title, body)
+        return proxy, body
 
     def _add_label(self, body, text, height=48, font_size="14sp"):
         lab = Label(
