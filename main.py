@@ -75,16 +75,17 @@ if CHINESE_FONT != "Roboto":
 """)
 
 
-# Android触摸/键盘优化：让输入框单击更容易获得焦点，并让软键盘尽量不要盖住输入框。
+# Android上保持Kivy默认软键盘模式。
+# 不使用 below_target，避免视口平移后视觉位置与触摸坐标短暂不同步。
 if platform == "android":
     try:
-        Window.softinput_mode = "below_target"
+        Window.softinput_mode = ""
     except Exception:
         pass
 
 
 class MobileTextInput(TextInput):
-    """针对手机触摸优化的输入框。"""
+    """手机输入框：只扩大可点击区域，不改写Kivy原生触摸与焦点事件。"""
 
     def __init__(self, **kwargs):
         kwargs.setdefault("font_size", "18sp")
@@ -94,19 +95,6 @@ class MobileTextInput(TextInput):
         kwargs.setdefault("use_bubble", False)
         kwargs.setdefault("use_handles", False)
         super().__init__(**kwargs)
-
-    def _force_focus(self, *_):
-        if not self.disabled and not self.readonly:
-            self.focus = True
-
-    def on_touch_down(self, touch):
-        inside = self.collide_point(*touch.pos) and not self.disabled and not self.readonly
-        handled = super().on_touch_down(touch)
-        if inside:
-            # 三星/Android上偶尔第一次触摸只定位光标、不弹键盘；稍后再次确认焦点。
-            self.focus = True
-            Clock.schedule_once(self._force_focus, 0.03)
-        return handled
 
 
 MODES = [
@@ -331,6 +319,9 @@ class NumberAnalysisRoot(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(orientation="vertical", spacing=dp(6), padding=dp(6), **kwargs)
 
+        # -------------------------
+        # 数据状态
+        # -------------------------
         self.loaded_files = []
         self.file_A = None
         self.file_B = None
@@ -341,10 +332,23 @@ class NumberAnalysisRoot(BoxLayout):
         self.current_exports = {}
         self.current_view_name = None
 
+        # 这三个 TextInput 只作为“数据容器”，不直接放在主界面上。
+        # 主界面改为大按钮 -> 弹出专用输入窗口。
+        # 这样 Android 上不需要反复点小输入框抢焦点。
+        self.input1 = MobileTextInput(multiline=True)
+        self.input2 = MobileTextInput(multiline=True)
+        self.input3 = MobileTextInput(multiline=True)
+        self._input_widgets = [self.input1, self.input2, self.input3]
+        self._input_hints = ["", "", ""]
+        self._input_titles = ["输入1", "输入2", "输入3"]
+
+        # -------------------------
+        # 标题 + 功能选择
+        # -------------------------
         self.add_widget(Label(
             text="数字分析工具（离线版）",
             size_hint_y=None,
-            height=dp(36),
+            height=dp(34),
             font_size="19sp"
         ))
 
@@ -352,7 +356,8 @@ class NumberAnalysisRoot(BoxLayout):
             text=MODES[0],
             values=MODES,
             size_hint_y=None,
-            height=dp(54)
+            height=dp(58),
+            font_size="16sp"
         )
         self.mode.bind(text=self.on_mode_change)
         self.add_widget(self.mode)
@@ -360,32 +365,49 @@ class NumberAnalysisRoot(BoxLayout):
         self.instructions = Label(
             text="",
             size_hint_y=None,
-            height=dp(34),
+            height=dp(46),
             halign="left",
-            valign="middle"
+            valign="middle",
+            font_size="13sp"
         )
         self.instructions.bind(
             size=lambda inst, val: setattr(inst, "text_size", (val[0], None))
         )
         self.add_widget(self.instructions)
 
-        self.input1 = MobileTextInput(multiline=True, size_hint_y=None, height=dp(88))
-        self.input2 = MobileTextInput(multiline=True, size_hint_y=None, height=dp(88))
-        self.input3 = MobileTextInput(multiline=True, size_hint_y=None, height=dp(88))
-        self.add_widget(self.input1)
-        self.add_widget(self.input2)
-        self.add_widget(self.input3)
+        # -------------------------
+        # 手机专用输入区：主界面只放“大按钮”
+        # -------------------------
+        self.input_buttons = []
+        for i in range(3):
+            btn = Button(
+                text=f"点击输入{i+1}",
+                size_hint_y=None,
+                height=dp(60),
+                font_size="15sp",
+                halign="left",
+                valign="middle"
+            )
+            btn.bind(
+                size=lambda inst, val: setattr(inst, "text_size", (max(dp(10), val[0]-dp(18)), None))
+            )
+            btn.bind(on_release=lambda _btn, idx=i: self.open_input_editor(idx))
+            self.input_buttons.append(btn)
+            self.add_widget(btn)
 
+        # -------------------------
+        # 附件区
+        # -------------------------
         self.file_row = BoxLayout(
             orientation="vertical",
             size_hint_y=None,
-            height=dp(108),
+            height=dp(116),
             spacing=dp(6)
         )
 
         self.file_button_row = BoxLayout(
             size_hint_y=None,
-            height=dp(52),
+            height=dp(56),
             spacing=dp(6)
         )
         self.file_row.add_widget(self.file_button_row)
@@ -395,7 +417,7 @@ class NumberAnalysisRoot(BoxLayout):
             halign="left",
             valign="middle",
             size_hint_y=None,
-            height=dp(50),
+            height=dp(54),
             font_size="14sp"
         )
         self.files_label.bind(
@@ -404,21 +426,29 @@ class NumberAnalysisRoot(BoxLayout):
         self.file_row.add_widget(self.files_label)
         self.add_widget(self.file_row)
 
-        action_row = BoxLayout(size_hint_y=None, height=dp(54), spacing=dp(6))
-        brun = Button(text="开始分析")
+        # -------------------------
+        # 分析 / 清空
+        # -------------------------
+        action_row = BoxLayout(size_hint_y=None, height=dp(58), spacing=dp(6))
+        brun = Button(text="开始分析", font_size="16sp")
         brun.bind(on_release=self.run_analysis)
-        bclear = Button(text="清空")
+        bclear = Button(text="清空", font_size="16sp")
         bclear.bind(on_release=self.clear_all)
         action_row.add_widget(brun)
         action_row.add_widget(bclear)
         self.add_widget(action_row)
 
+        # -------------------------
+        # 摘要 + 结果
+        # -------------------------
         self.summary = TextInput(
             readonly=True,
             multiline=True,
+            is_focusable=False,
             size_hint_y=None,
-            height=dp(104),
-            hint_text="分析摘要"
+            height=dp(88),
+            hint_text="分析摘要",
+            font_size="14sp"
         )
         self.add_widget(self.summary)
 
@@ -426,7 +456,8 @@ class NumberAnalysisRoot(BoxLayout):
             text="选择查看结果",
             values=(),
             size_hint_y=None,
-            height=dp(54)
+            height=dp(56),
+            font_size="15sp"
         )
         self.result_selector.bind(text=self.on_result_selected)
         self.add_widget(self.result_selector)
@@ -434,24 +465,29 @@ class NumberAnalysisRoot(BoxLayout):
         self.result = TextInput(
             readonly=True,
             multiline=True,
+            is_focusable=False,
             size_hint_y=1,
-            hint_text="分析后这里直接显示完整组合，10注一行"
+            hint_text="分析后这里直接显示完整组合，10注一行",
+            font_size="15sp"
         )
         self.add_widget(self.result)
 
-        copy_row = BoxLayout(size_hint_y=None, height=dp(54), spacing=dp(6))
-        bcopy = Button(text="复制当前结果")
+        # -------------------------
+        # 复制 / 保存
+        # -------------------------
+        copy_row = BoxLayout(size_hint_y=None, height=dp(58), spacing=dp(6))
+        bcopy = Button(text="复制当前结果", font_size="15sp")
         bcopy.bind(on_release=self.copy_current_result)
-        bcopyall = Button(text="复制全部结果")
+        bcopyall = Button(text="复制全部结果", font_size="15sp")
         bcopyall.bind(on_release=self.copy_all_results)
         copy_row.add_widget(bcopy)
         copy_row.add_widget(bcopyall)
         self.add_widget(copy_row)
 
-        save_row = BoxLayout(size_hint_y=None, height=dp(54), spacing=dp(6))
-        bcurrent = Button(text="保存当前到下载")
+        save_row = BoxLayout(size_hint_y=None, height=dp(58), spacing=dp(6))
+        bcurrent = Button(text="保存当前到下载", font_size="15sp")
         bcurrent.bind(on_release=self.export_current_to_download)
-        ball = Button(text="保存全部到下载")
+        ball = Button(text="保存全部到下载", font_size="15sp")
         ball.bind(on_release=self.export_results_to_download)
         save_row.add_widget(bcurrent)
         save_row.add_widget(ball)
@@ -461,7 +497,143 @@ class NumberAnalysisRoot(BoxLayout):
 
 
 
+    def _unfocus_inputs(self, *_):
+        """主界面不再直接放可编辑 TextInput；这里只负责关闭残余键盘焦点。"""
+        for widget in self._input_widgets:
+            try:
+                widget.focus = False
+            except Exception:
+                pass
+
+
+    def _mode_input_titles(self, mode):
+        titles = {
+            "口径1取号": ["口径1条件"],
+            "形态取号": ["大小 + 奇偶形态"],
+            "口径1双条件全量交集": ["A条件", "B条件"],
+            "口径1交集后数字形态轨": ["A条件", "B条件", "数字轨 + 4个形态轨"],
+            "形态筛选": ["要去掉的大小形态", "要去掉的奇偶形态"],
+            "两位组合命中筛选（按附件）": ["两位组合", "命中模式"],
+            "两位组合命中筛选（000-999）": ["两位组合", "命中模式"],
+            "数字包含 / 去除筛选": ["目标数字", "筛选模式"],
+            "三至七位拆两位组合": ["3-7位数字"],
+        }
+        vals = titles.get(mode, [])
+        vals = vals + [f"输入{i+1}" for i in range(len(vals), 3)]
+        return vals[:3]
+
+    def _short_preview(self, text, max_len=38):
+        clean = " ".join((text or "").split())
+        if not clean:
+            return ""
+        if len(clean) <= max_len:
+            return clean
+        return clean[:max_len] + "…"
+
+    def _update_input_buttons(self):
+        for i, btn in enumerate(self.input_buttons):
+            if btn.height <= 0:
+                continue
+            title = self._input_titles[i]
+            value = self._short_preview(self._input_widgets[i].text)
+            if value:
+                btn.text = f"{title}：{value}\n（点击修改）"
+            else:
+                hint = self._short_preview(self._input_hints[i], 44)
+                btn.text = f"点击输入：{title}\n{hint}"
+
+    def open_input_editor(self, index):
+        """
+        手机端统一输入窗口。
+        主界面只需点一次大按钮；弹窗打开后程序自动给输入框焦点并唤起键盘。
+        """
+        if not 0 <= index < 3:
+            return
+        target = self._input_widgets[index]
+        title = self._input_titles[index]
+        hint = self._input_hints[index]
+
+        outer = BoxLayout(
+            orientation="vertical",
+            spacing=dp(8),
+            padding=dp(8)
+        )
+
+        help_label = Label(
+            text=(hint or title),
+            size_hint_y=None,
+            height=dp(58),
+            halign="left",
+            valign="middle",
+            font_size="14sp"
+        )
+        help_label.bind(
+            size=lambda inst, val: setattr(inst, "text_size", (val[0], None))
+        )
+        outer.add_widget(help_label)
+
+        editor = MobileTextInput(
+            text=target.text,
+            hint_text=hint,
+            multiline=True,
+            size_hint_y=1,
+            font_size="19sp",
+            padding=[dp(14), dp(14), dp(14), dp(14)]
+        )
+        outer.add_widget(editor)
+
+        row = BoxLayout(size_hint_y=None, height=dp(60), spacing=dp(8))
+        ok = Button(text="确定", font_size="17sp")
+        clear = Button(text="清空输入", font_size="16sp")
+        cancel = Button(text="取消", font_size="16sp")
+        row.add_widget(ok)
+        row.add_widget(clear)
+        row.add_widget(cancel)
+        outer.add_widget(row)
+
+        pop = Popup(
+            title=title,
+            content=outer,
+            size_hint=(0.97, 0.78),
+            auto_dismiss=False
+        )
+
+        def commit(*_):
+            target.text = editor.text
+            editor.focus = False
+            self._update_input_buttons()
+            pop.dismiss()
+
+        def clear_editor(*_):
+            editor.text = ""
+            editor.focus = True
+
+        def cancel_edit(*_):
+            editor.focus = False
+            pop.dismiss()
+
+        ok.bind(on_release=commit)
+        clear.bind(on_release=clear_editor)
+        cancel.bind(on_release=cancel_edit)
+
+        pop.open()
+
+        # Android 上不让用户再去点弹窗里的 TextInput：自动获得焦点。
+        def focus_editor(_dt):
+            try:
+                editor.focus = True
+                editor.cursor = (len(editor._lines[-1]) if editor._lines else 0,
+                                 max(0, len(editor._lines)-1))
+            except Exception:
+                try:
+                    editor.focus = True
+                except Exception:
+                    pass
+
+        Clock.schedule_once(focus_editor, 0.18)
+
     def on_mode_change(self, _spinner, mode):
+        self._unfocus_inputs()
         self._reset_file_roles()
         self.current_exports = {}
         self.current_view_name = None
@@ -469,9 +641,9 @@ class NumberAnalysisRoot(BoxLayout):
         self.result.text = ""
         self.result_selector.values = ()
         self.result_selector.text = "选择查看结果"
-        self.input1.text = ""
-        self.input2.text = ""
-        self.input3.text = ""
+
+        for widget in self._input_widgets:
+            widget.text = ""
 
         config = {
             "口径1取号": (
@@ -482,8 +654,7 @@ class NumberAnalysisRoot(BoxLayout):
             "形态取号": (
                 1, False,
                 "大小和奇偶一起输入，可自由混合，例如：大大大 大大小\n奇奇奇 奇奇偶",
-                "",
-                ""
+                "", ""
             ),
             "口径1双条件全量交集": (
                 2, False,
@@ -522,13 +693,13 @@ class NumberAnalysisRoot(BoxLayout):
             "两位组合命中筛选（按附件）": (
                 2, True,
                 "输入两位组合，如：01 03 05 06 ...",
-                "模式：至少2对 / 恰好2对 / 三对全命中",
+                "输入模式：至少2对 / 恰好2对 / 三对全命中",
                 ""
             ),
             "两位组合命中筛选（000-999）": (
                 2, False,
                 "输入两位组合，如：01 03 05 06 ...",
-                "模式：至少2对 / 恰好2对 / 三对全命中",
+                "输入模式：至少2对 / 恰好2对 / 三对全命中",
                 ""
             ),
             "数字包含 / 去除筛选": (
@@ -549,41 +720,52 @@ class NumberAnalysisRoot(BoxLayout):
         }
 
         input_count, need_file, h1, h2, h3 = config[mode]
+        self._input_hints = [h1, h2, h3]
+        self._input_titles = self._mode_input_titles(mode)
 
         extra = ""
         if mode == "交集 / 不交集":
-            extra = " 请分别点“选择A附件”和“选择B附件”，不再依赖上传顺序。"
+            extra = " 分别选择A附件、B附件。"
         elif mode == "A分别与多个文件交集":
-            extra = " 先点“选择A附件”，再点“添加B/C/D附件”；程序会明确标出每个角色。"
+            extra = " 先选择A，再添加B/C/D附件。"
         elif mode == "合并去重":
-            extra = " 直接添加2个以上附件即可，不区分A/B/C角色。"
+            extra = " 添加2个以上附件，不区分角色。"
+        elif input_count:
+            extra = " 点击下面的大输入按钮，弹窗会自动打开键盘。"
 
-        self.instructions.text = (
-            "本次只使用当前输入和当前附件，不调用旧数据。"
-            + (" 需要附件时请在下面选择。" if need_file else "")
-            + extra
-        )
+        self.instructions.text = "本次只使用当前输入和当前附件。" + extra
 
-        hints = [h1, h2, h3]
-        widgets = [self.input1, self.input2, self.input3]
-
-        for i, widget in enumerate(widgets):
+        for i, btn in enumerate(self.input_buttons):
             show = i < input_count
-            widget.hint_text = hints[i]
-            widget.height = dp(88) if show else 0
-            widget.opacity = 1 if show else 0
-            widget.disabled = not show
+            btn.height = dp(60) if show else 0
+            btn.opacity = 1 if show else 0
+            btn.disabled = not show
+            self._input_widgets[i].hint_text = self._input_hints[i]
 
+        self._update_input_buttons()
         self._configure_file_controls(mode, need_file)
 
 
 
     def clear_all(self, *_):
-        self.input1.text = ""
-        self.input2.text = ""
-        self.input3.text = ""
+        self._unfocus_inputs()
+        for widget in self._input_widgets:
+            widget.text = ""
+        self._update_input_buttons()
         self._reset_file_roles()
-        self._configure_file_controls(self.mode.text, True)
+
+        need_file = self.mode.text in {
+            "交集 / 不交集",
+            "A分别与多个文件交集",
+            "合并去重",
+            "形态筛选",
+            "二同 / 三同 / 三不同",
+            "两位组合命中筛选（按附件）",
+            "数字包含 / 去除筛选",
+            "半顺以上筛选",
+        }
+        self._configure_file_controls(self.mode.text, need_file)
+
         self.summary.text = ""
         self.result.text = ""
         self.current_exports = {}
@@ -657,39 +839,45 @@ class NumberAnalysisRoot(BoxLayout):
             self.file_row.disabled = True
             return
 
-        self.file_row.height = dp(108)
+        self.file_row.height = dp(116)
         self.file_row.opacity = 1
         self.file_row.disabled = False
 
+        def make_button(label, callback):
+            b = Button(text=label, font_size="15sp")
+            b.bind(on_release=callback)
+            return b
+
         if mode == "交集 / 不交集":
-            ba = Button(text="选择A附件")
-            bb = Button(text="选择B附件")
-            ba.bind(on_release=lambda *_: self.select_file_role("A"))
-            bb.bind(on_release=lambda *_: self.select_file_role("B"))
-            self.file_button_row.add_widget(ba)
-            self.file_button_row.add_widget(bb)
+            self.file_button_row.add_widget(
+                make_button("选择A附件", lambda *_: self.select_file_role("A"))
+            )
+            self.file_button_row.add_widget(
+                make_button("选择B附件", lambda *_: self.select_file_role("B"))
+            )
 
         elif mode == "A分别与多个文件交集":
-            ba = Button(text="选择A附件")
-            bothers = Button(text="添加B/C/D附件")
-            ba.bind(on_release=lambda *_: self.select_file_role("A"))
-            bothers.bind(on_release=lambda *_: self.select_file_role("others"))
-            self.file_button_row.add_widget(ba)
-            self.file_button_row.add_widget(bothers)
+            self.file_button_row.add_widget(
+                make_button("选择A附件", lambda *_: self.select_file_role("A"))
+            )
+            self.file_button_row.add_widget(
+                make_button("添加B/C/D附件", lambda *_: self.select_file_role("others"))
+            )
 
         elif mode == "合并去重":
-            b = Button(text="添加附件")
-            b.bind(on_release=lambda *_: self.select_file_role("append"))
-            self.file_button_row.add_widget(b)
+            self.file_button_row.add_widget(
+                make_button("添加附件", lambda *_: self.select_file_role("append"))
+            )
 
         else:
-            b = Button(text="选择TXT附件")
-            b.bind(on_release=lambda *_: self.select_file_role("single"))
-            self.file_button_row.add_widget(b)
+            self.file_button_row.add_widget(
+                make_button("选择TXT附件", lambda *_: self.select_file_role("single"))
+            )
 
         self._refresh_loaded_files_label()
 
     def select_file_role(self, target):
+        self._unfocus_inputs()
         self._picker_target = target
 
         if platform == "android":
@@ -1433,6 +1621,7 @@ class NumberAnalysisRoot(BoxLayout):
 
 
     def run_analysis(self, *_):
+        self._unfocus_inputs()
         mode = self.mode.text
         self.current_exports = {}
         self.current_view_name = None
