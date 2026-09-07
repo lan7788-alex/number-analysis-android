@@ -374,6 +374,8 @@ class NumberAnalysisRoot(BoxLayout):
         self.current_exports = {}
         self.current_view_name = None
         self._native_dialog_refs = None
+        self._editor_open_pending = False
+        self._pending_editor_index = None
 
         # 这三个 TextInput 只作为“数据容器”，不直接参与触摸输入。
         # 所有业务输入都改为“纯按钮选择/数字键盘/剪贴板导入”，
@@ -434,10 +436,12 @@ class NumberAnalysisRoot(BoxLayout):
             btn.bind(
                 size=lambda inst, val: setattr(inst, "text_size", (max(dp(10), val[0]-dp(18)), None))
             )
+            # 设置按钮与“开始分析”统一使用 on_release。
+            # 关键点：触摸事件回调里不立刻删除/重建当前界面，
+            # 只排队到下一帧再切换，避免 Android/Kivy 在同一次触摸分发中
+            # 改变控件树导致点击迟钝或需要多次点击。
             btn.bind(
-                on_release=lambda _btn, idx=i: Clock.schedule_once(
-                    lambda _dt, j=idx: self.open_input_editor(j), 0
-                )
+                on_release=lambda _btn, idx=i: self._queue_input_editor(idx)
             )
             self.input_buttons.append(btn)
             self.add_widget(btn)
@@ -672,6 +676,45 @@ class NumberAnalysisRoot(BoxLayout):
                 btn.text = f"点击设置：{title}\n{hint}"
 
 
+    def _queue_input_editor(self, index):
+        """
+        设置按钮的轻量入口。
+
+        这里故意不删除 main_panel、不创建编辑器，也不打开 Popup。
+        只记录请求并排到下一帧处理，使触摸回调本身和“开始分析”一样轻。
+        """
+        if not 0 <= index < 3:
+            return
+
+        # 防止连续抖动重复排队；下一帧进入设置页后立即解除。
+        if getattr(self, "_editor_open_pending", False):
+            return
+        self._editor_open_pending = True
+        self._pending_editor_index = index
+
+        # 同一页先给一个极轻量反馈；不改控件树。
+        try:
+            self.instructions.text = f"正在打开：{self._input_titles[index]}…"
+        except Exception:
+            pass
+
+        Clock.schedule_once(self._open_queued_input_editor, 0)
+
+    def _open_queued_input_editor(self, _dt):
+        """在触摸事件已经结束后的下一帧，才真正构建/切换设置页。"""
+        index = getattr(self, "_pending_editor_index", None)
+        self._editor_open_pending = False
+        self._pending_editor_index = None
+
+        if index is None or not 0 <= index < 3:
+            return
+
+        try:
+            self.open_input_editor(index)
+        except Exception as e:
+            # 如果设置页自身构建失败，直接在主界面显示错误，避免表现成“点了没反应”。
+            self.result.text = f"打开设置失败：{e}"
+
     def open_input_editor(self, index):
         """
         纯按钮输入总入口。
@@ -828,7 +871,7 @@ class NumberAnalysisRoot(BoxLayout):
             def choose_size(_btn, p=pos):
                 state["size_pos"] = p
                 refresh()
-            b.bind(on_release=choose_size)
+            b.bind(on_press=choose_size)
             size_grid.add_widget(b)
         body.add_widget(size_grid)
 
@@ -841,7 +884,7 @@ class NumberAnalysisRoot(BoxLayout):
             def choose_parity(_btn, p=pos):
                 state["parity_pos"] = p
                 refresh()
-            b.bind(on_release=choose_parity)
+            b.bind(on_press=choose_parity)
             parity_grid.add_widget(b)
         body.add_widget(parity_grid)
 
@@ -1697,14 +1740,27 @@ class NumberAnalysisRoot(BoxLayout):
         self.file_button_row.clear_widgets()
 
         if not need_file:
+            # 关键修复：不能只把父容器 file_row 高度设为0。
+            # file_button_row / files_label 自己仍有固定高度，Kivy 不会自动裁剪子控件，
+            # 子控件可能伸出0高度父容器，覆盖并拦截上方“点击设置”按钮的触摸。
+            # 所以无附件模式必须把父容器和两个子控件一起彻底收起。
+            self.file_button_row.height = 0
+            self.files_label.height = 0
             self.file_row.height = 0
             self.file_row.opacity = 0
             self.file_row.disabled = True
+            self.file_button_row.disabled = True
+            self.files_label.disabled = True
             return
 
+        # 需要附件时恢复完整附件区域。
+        self.file_button_row.height = dp(56)
+        self.files_label.height = dp(54)
         self.file_row.height = dp(116)
         self.file_row.opacity = 1
         self.file_row.disabled = False
+        self.file_button_row.disabled = False
+        self.files_label.disabled = False
 
         def make_button(label, callback):
             b = Button(text=label, font_size="15sp")
