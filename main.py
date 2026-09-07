@@ -626,22 +626,25 @@ class NumberAnalysisRoot(BoxLayout):
         self._show_message("输入方式", "这个位置当前没有可用的按钮输入面板。")
 
     def _popup_shell(self, title):
-        """创建统一的纯按钮滚动弹窗。"""
-        outer = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(6))
-        scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False, scroll_timeout=80, scroll_distance=dp(14))
+        """
+        创建纯按钮弹窗。
+
+        重要：这里不再使用 ScrollView。
+        Kivy ScrollView 会先截获触摸来判断用户是在滚动还是点击，
+        在部分三星手机上会让里面的按钮出现“点很多次才响应”的感觉。
+        现在按钮直接放在普通 BoxLayout 中，触摸路径和主界面的
+        “选择A附件”按钮一致。
+        """
         body = BoxLayout(
             orientation="vertical",
-            spacing=dp(6),
-            padding=[dp(2), dp(2), dp(2), dp(8)],
-            size_hint_y=None
+            spacing=dp(5),
+            padding=[dp(5), dp(5), dp(5), dp(6)],
+            size_hint=(1, 1)
         )
-        body.bind(minimum_height=body.setter("height"))
-        scroll.add_widget(body)
-        outer.add_widget(scroll)
         popup = Popup(
             title=title,
-            content=outer,
-            size_hint=(0.97, 0.93),
+            content=body,
+            size_hint=(0.98, 0.95),
             auto_dismiss=False
         )
         return popup, body
@@ -837,7 +840,7 @@ class NumberAnalysisRoot(BoxLayout):
             allowed += PARITY_SHAPES
 
         selected = {x for x in allowed if x in (target.text or "")}
-        status = self._add_label(body, "", height=60, font_size="15sp")
+        status = self._add_label(body, "", height=52, font_size="14sp")
         buttons = {}
 
         def refresh():
@@ -854,7 +857,7 @@ class NumberAnalysisRoot(BoxLayout):
 
         def add_shape_section(label_text, shapes):
             self._add_label(body, label_text, height=38)
-            grid = GridLayout(cols=2, spacing=dp(5), size_hint_y=None, height=dp(49)*4 + dp(15))
+            grid = GridLayout(cols=2, spacing=dp(5), size_hint_y=None, height=dp(43)*4 + dp(12))
             for shape in shapes:
                 b = Button(text=shape, font_size="15sp")
                 buttons[shape] = b
@@ -905,7 +908,7 @@ class NumberAnalysisRoot(BoxLayout):
         selected_digits = set(parse_digit_track(lines[0]) if lines else [])
         selected_shapes = [x for x in lines[1:5] if classify_shape_token(x)] if len(lines) > 1 else []
 
-        status = self._add_label(body, "", height=62, font_size="15sp")
+        status = self._add_label(body, "", height=54, font_size="14sp")
         digit_buttons = {}
         shape_buttons = {}
 
@@ -925,7 +928,7 @@ class NumberAnalysisRoot(BoxLayout):
         body.add_widget(dgrid)
 
         self._add_label(body, "② 点选4个形态轨（大小/奇偶可混合）", height=42)
-        sgrid = GridLayout(cols=2, spacing=dp(5), size_hint_y=None, height=dp(49)*8 + dp(35))
+        sgrid = GridLayout(cols=2, spacing=dp(5), size_hint_y=None, height=dp(42)*8 + dp(24))
         for shape in SIZE_SHAPES + PARITY_SHAPES:
             b = Button(text=shape, font_size="15sp")
             shape_buttons[shape] = b
