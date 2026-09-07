@@ -3,7 +3,7 @@ import re
 from itertools import combinations
 
 from kivy.app import App
-from kivy.clock import Clock
+from kivy.clock import Clock, mainthread
 from kivy.core.clipboard import Clipboard
 from kivy.core.window import Window
 from kivy.lang import Builder
@@ -496,9 +496,15 @@ class NumberAnalysisRoot(BoxLayout):
         }
 
         input_count, need_file, h1, h2, h3 = config[mode]
+        extra = ""
+        if mode == "交集 / 不交集":
+            extra = " 请选择2个附件；程序会明确显示A/B对应文件。"
+        elif mode == "A分别与多个文件交集":
+            extra = " 第1个文件作为A，其余作为B/C/D…；选后会显示对应关系。"
         self.instructions.text = (
             "本次只使用当前输入和当前附件，不调用旧数据。"
             + (" 需要附件时点‘选择TXT附件’。" if need_file else "")
+            + extra
         )
         hints = [h1, h2, h3]
         widgets = [self.input1, self.input2, self.input3]
@@ -584,9 +590,11 @@ class NumberAnalysisRoot(BoxLayout):
         intent.setType("*/*")
         intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, True)
 
-        chooser = Intent.createChooser(intent, "选择TXT附件")
-        PythonActivity.mActivity.startActivityForResult(chooser, 9047)
+        # 直接启动 Android 系统原生文件选择器，
+        # 避免 PyJNIus 对 createChooser(CharSequence) 的重载解析失败。
+        PythonActivity.mActivity.startActivityForResult(intent, 9047)
 
+    @mainthread
     def _on_android_activity_result(self, request_code, result_code, data):
         if request_code != 9047:
             return
@@ -735,6 +743,17 @@ class NumberAnalysisRoot(BoxLayout):
             return
 
         names = [os.path.basename(p) for p in self.loaded_files]
+        mode = self.mode.text
+
+        if mode == "交集 / 不交集" and len(names) >= 2:
+            self.files_label.text = f"A={names[0]}；B={names[1]}"
+            return
+
+        if mode == "A分别与多个文件交集" and len(names) >= 2:
+            rest = "、".join(names[1:3]) + ("…" if len(names) > 3 else "")
+            self.files_label.text = f"A={names[0]}；其余={rest}"
+            return
+
         if len(names) <= 2:
             self.files_label.text = "已选：" + "、".join(names)
         else:
@@ -1005,7 +1024,7 @@ class NumberAnalysisRoot(BoxLayout):
         else:
             body = format_txt(values)
 
-        text = f"【{name}】\\n{body}"
+        text = f"【{name}】\n{body}"
         self._clipboard_copy(text)
 
     def copy_all_results(self, *_):
@@ -1019,9 +1038,9 @@ class NumberAnalysisRoot(BoxLayout):
                 body = values
             else:
                 body = format_txt(values)
-            blocks.append(f"【{name}】\\n{body}")
+            blocks.append(f"【{name}】\n{body}")
 
-        self._clipboard_copy("\\n\\n".join(blocks))
+        self._clipboard_copy("\n\n".join(blocks))
 
     def export_current_to_download(self, *_):
         name = self.current_view_name
@@ -1492,17 +1511,16 @@ class NumberAnalysisRoot(BoxLayout):
         if not tokens:
             self.result.text = "请输入3-7位数字。"
             return
-        out, merged, exports = [], set(), {}
+
+        merged = set()
         for t in tokens:
-            pairs = split_to_pairs(t)
-            merged.update(pairs)
-            out.append(pair_section_text(t, pairs))
-            exports[f"{t}_拆两位_{len(pairs)}组"] = pairs
+            merged.update(split_to_pairs(t))
+
         merged = sorted(merged)
-        out.append(pair_section_text("全部合并去重", merged))
-        exports[f"三至七位拆两位_合并去重_{len(merged)}组"] = merged
-        self.result.text = "\n\n".join(out)
-        self.set_exports(**exports)
+        self.result.text = pair_section_text("合并去重结果", merged)
+        self.set_exports(**{
+            f"三至七位拆两位_合并去重_{len(merged)}组": merged
+        })
 
     def do_14(self):
         if not self.need_files(count=1):
