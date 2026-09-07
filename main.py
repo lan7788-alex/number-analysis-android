@@ -74,6 +74,41 @@ if CHINESE_FONT != "Roboto":
     title_font: "{_font}"
 """)
 
+
+# Android触摸/键盘优化：让输入框单击更容易获得焦点，并让软键盘尽量不要盖住输入框。
+if platform == "android":
+    try:
+        Window.softinput_mode = "below_target"
+    except Exception:
+        pass
+
+
+class MobileTextInput(TextInput):
+    """针对手机触摸优化的输入框。"""
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("font_size", "18sp")
+        kwargs.setdefault("padding", [dp(12), dp(12), dp(12), dp(12)])
+        kwargs.setdefault("cursor_width", dp(2))
+        kwargs.setdefault("write_tab", False)
+        kwargs.setdefault("use_bubble", False)
+        kwargs.setdefault("use_handles", False)
+        super().__init__(**kwargs)
+
+    def _force_focus(self, *_):
+        if not self.disabled and not self.readonly:
+            self.focus = True
+
+    def on_touch_down(self, touch):
+        inside = self.collide_point(*touch.pos) and not self.disabled and not self.readonly
+        handled = super().on_touch_down(touch)
+        if inside:
+            # 三星/Android上偶尔第一次触摸只定位光标、不弹键盘；稍后再次确认焦点。
+            self.focus = True
+            Clock.schedule_once(self._force_focus, 0.03)
+        return handled
+
+
 MODES = [
     "口径1取号",
     "形态取号",
@@ -317,7 +352,7 @@ class NumberAnalysisRoot(BoxLayout):
             text=MODES[0],
             values=MODES,
             size_hint_y=None,
-            height=dp(46)
+            height=dp(54)
         )
         self.mode.bind(text=self.on_mode_change)
         self.add_widget(self.mode)
@@ -334,9 +369,9 @@ class NumberAnalysisRoot(BoxLayout):
         )
         self.add_widget(self.instructions)
 
-        self.input1 = TextInput(multiline=True, size_hint_y=None, height=dp(74))
-        self.input2 = TextInput(multiline=True, size_hint_y=None, height=dp(74))
-        self.input3 = TextInput(multiline=True, size_hint_y=None, height=dp(74))
+        self.input1 = MobileTextInput(multiline=True, size_hint_y=None, height=dp(88))
+        self.input2 = MobileTextInput(multiline=True, size_hint_y=None, height=dp(88))
+        self.input3 = MobileTextInput(multiline=True, size_hint_y=None, height=dp(88))
         self.add_widget(self.input1)
         self.add_widget(self.input2)
         self.add_widget(self.input3)
@@ -344,13 +379,13 @@ class NumberAnalysisRoot(BoxLayout):
         self.file_row = BoxLayout(
             orientation="vertical",
             size_hint_y=None,
-            height=dp(96),
-            spacing=dp(4)
+            height=dp(108),
+            spacing=dp(6)
         )
 
         self.file_button_row = BoxLayout(
             size_hint_y=None,
-            height=dp(46),
+            height=dp(52),
             spacing=dp(6)
         )
         self.file_row.add_widget(self.file_button_row)
@@ -360,8 +395,8 @@ class NumberAnalysisRoot(BoxLayout):
             halign="left",
             valign="middle",
             size_hint_y=None,
-            height=dp(46),
-            font_size="13sp"
+            height=dp(50),
+            font_size="14sp"
         )
         self.files_label.bind(
             size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1]))
@@ -369,7 +404,7 @@ class NumberAnalysisRoot(BoxLayout):
         self.file_row.add_widget(self.files_label)
         self.add_widget(self.file_row)
 
-        action_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        action_row = BoxLayout(size_hint_y=None, height=dp(54), spacing=dp(6))
         brun = Button(text="开始分析")
         brun.bind(on_release=self.run_analysis)
         bclear = Button(text="清空")
@@ -382,7 +417,7 @@ class NumberAnalysisRoot(BoxLayout):
             readonly=True,
             multiline=True,
             size_hint_y=None,
-            height=dp(96),
+            height=dp(104),
             hint_text="分析摘要"
         )
         self.add_widget(self.summary)
@@ -391,7 +426,7 @@ class NumberAnalysisRoot(BoxLayout):
             text="选择查看结果",
             values=(),
             size_hint_y=None,
-            height=dp(46)
+            height=dp(54)
         )
         self.result_selector.bind(text=self.on_result_selected)
         self.add_widget(self.result_selector)
@@ -404,7 +439,7 @@ class NumberAnalysisRoot(BoxLayout):
         )
         self.add_widget(self.result)
 
-        copy_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        copy_row = BoxLayout(size_hint_y=None, height=dp(54), spacing=dp(6))
         bcopy = Button(text="复制当前结果")
         bcopy.bind(on_release=self.copy_current_result)
         bcopyall = Button(text="复制全部结果")
@@ -413,7 +448,7 @@ class NumberAnalysisRoot(BoxLayout):
         copy_row.add_widget(bcopyall)
         self.add_widget(copy_row)
 
-        save_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        save_row = BoxLayout(size_hint_y=None, height=dp(54), spacing=dp(6))
         bcurrent = Button(text="保存当前到下载")
         bcurrent.bind(on_release=self.export_current_to_download)
         ball = Button(text="保存全部到下载")
@@ -445,9 +480,9 @@ class NumberAnalysisRoot(BoxLayout):
                 "", ""
             ),
             "形态取号": (
-                2, False,
-                "输入大小形态，可自由搭配",
-                "输入奇偶形态，可自由搭配",
+                1, False,
+                "大小和奇偶一起输入，可自由混合，例如：大大大 大大小\n奇奇奇 奇奇偶",
+                "",
                 ""
             ),
             "口径1双条件全量交集": (
@@ -535,7 +570,7 @@ class NumberAnalysisRoot(BoxLayout):
         for i, widget in enumerate(widgets):
             show = i < input_count
             widget.hint_text = hints[i]
-            widget.height = dp(74) if show else 0
+            widget.height = dp(88) if show else 0
             widget.opacity = 1 if show else 0
             widget.disabled = not show
 
@@ -622,7 +657,7 @@ class NumberAnalysisRoot(BoxLayout):
             self.file_row.disabled = True
             return
 
-        self.file_row.height = dp(96)
+        self.file_row.height = dp(108)
         self.file_row.opacity = 1
         self.file_row.disabled = False
 
@@ -1455,18 +1490,26 @@ class NumberAnalysisRoot(BoxLayout):
         self.set_exports(**exports)
 
     def do_2(self):
-        size_selected = [x for x in SIZE_SHAPES if x in self.input1.text]
-        parity_selected = [x for x in PARITY_SHAPES if x in self.input2.text]
+        text_all = self.input1.text or ""
+        size_selected = [x for x in SIZE_SHAPES if x in text_all]
+        parity_selected = [x for x in PARITY_SHAPES if x in text_all]
+
         if not size_selected:
             self.result.text = "请至少输入1个有效的大小形态。"
             return
         if not parity_selected:
             self.result.text = "请至少输入1个有效的奇偶形态。"
             return
-        full = [n for n in ALL_NUMBERS if size_shape(n) in size_selected and parity_shape(n) in parity_selected]
+
+        full = [
+            n for n in ALL_NUMBERS
+            if size_shape(n) in size_selected and parity_shape(n) in parity_selected
+        ]
         same23 = [n for n in full if repeat_type(n) != "三不同"]
         diff = [n for n in full if repeat_type(n) == "三不同"]
+
         self.result.text = "\n".join([
+            "输入方式：大小和奇偶共用一个输入框",
             f"大小入选形态（{len(size_selected)}个）：" + "、".join(size_selected),
             f"奇偶入选形态（{len(parity_selected)}个）：" + "、".join(parity_selected),
             f"全量入选：{len(full)} 注",
