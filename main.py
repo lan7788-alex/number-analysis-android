@@ -18,6 +18,27 @@ from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
 from kivy.utils import platform
 
+# Android 输入改用系统原生 EditText/AlertDialog，彻底绕开 Kivy TextInput 的触摸/焦点链路。
+if platform == "android":
+    from android.runnable import run_on_ui_thread
+    from jnius import PythonJavaClass, java_method
+
+    class _DialogClickListener(PythonJavaClass):
+        __javainterfaces__ = ["android/content/DialogInterface$OnClickListener"]
+        __javacontext__ = "app"
+
+        def __init__(self, callback):
+            super().__init__()
+            self.callback = callback
+
+        @java_method("(Landroid/content/DialogInterface;I)V")
+        def onClick(self, dialog, which):
+            if self.callback:
+                self.callback()
+else:
+    def run_on_ui_thread(func):
+        return func
+
 ALL_NUMBERS = [f"{i:03d}" for i in range(1000)]
 SIZE_SHAPES = ["大大大", "大大小", "大小大", "大小小", "小大大", "小大小", "小小大", "小小小"]
 PARITY_SHAPES = ["奇奇奇", "奇奇偶", "奇偶奇", "奇偶偶", "偶奇奇", "偶奇偶", "偶偶奇", "偶偶偶"]
@@ -331,6 +352,7 @@ class NumberAnalysisRoot(BoxLayout):
         self._picker_target = "single"
         self.current_exports = {}
         self.current_view_name = None
+        self._native_dialog_refs = None
 
         # 这三个 TextInput 只作为“数据容器”，不直接放在主界面上。
         # 主界面改为大按钮 -> 弹出专用输入窗口。
@@ -542,13 +564,22 @@ class NumberAnalysisRoot(BoxLayout):
                 hint = self._short_preview(self._input_hints[i], 44)
                 btn.text = f"点击输入：{title}\n{hint}"
 
+
     def open_input_editor(self, index):
         """
-        手机端统一输入窗口。
-        主界面只需点一次大按钮；弹窗打开后程序自动给输入框焦点并唤起键盘。
+        Android：使用系统原生 AlertDialog + EditText。
+        其它平台：保留 Kivy Popup 作为兼容入口。
         """
         if not 0 <= index < 3:
             return
+
+        if platform == "android":
+            self._open_native_input_editor(index)
+        else:
+            self._open_kivy_input_editor(index)
+
+    def _open_kivy_input_editor(self, index):
+        """桌面/非Android备用输入窗口。"""
         target = self._input_widgets[index]
         title = self._input_titles[index]
         hint = self._input_hints[index]
@@ -615,22 +646,113 @@ class NumberAnalysisRoot(BoxLayout):
         ok.bind(on_release=commit)
         clear.bind(on_release=clear_editor)
         cancel.bind(on_release=cancel_edit)
-
         pop.open()
+        Clock.schedule_once(lambda _dt: setattr(editor, "focus", True), 0.18)
 
-        # Android 上不让用户再去点弹窗里的 TextInput：自动获得焦点。
-        def focus_editor(_dt):
+    @mainthread
+    def _apply_native_input_value(self, index, value):
+        """从 Android UI 线程安全地把输入值写回 Kivy 数据容器。"""
+        try:
+            self._input_widgets[index].text = value
+            self._update_input_buttons()
+        finally:
+            # 释放 Java 回调引用；此时系统对话框已经关闭。
+            self._native_dialog_refs = None
+
+    @run_on_ui_thread
+    def _open_native_input_editor(self, index):
+        """
+        Android 系统原生输入窗口。
+
+        关键点：实际可编辑控件是 android.widget.EditText，
+        不再让 Kivy TextInput 处理点击、焦点和三星中文输入法事件。
+        """
+        from jnius import autoclass
+
+        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+        AlertDialogBuilder = autoclass("android.app.AlertDialog$Builder")
+        EditText = autoclass("android.widget.EditText")
+        InputType = autoclass("android.text.InputType")
+        Gravity = autoclass("android.view.Gravity")
+        Context = autoclass("android.content.Context")
+        InputMethodManager = autoclass("android.view.inputmethod.InputMethodManager")
+        WindowManagerLayoutParams = autoclass("android.view.WindowManager$LayoutParams")
+        JavaString = autoclass("java.lang.String")
+
+        activity = PythonActivity.mActivity
+        target = self._input_widgets[index]
+        title = self._input_titles[index]
+        hint = self._input_hints[index]
+
+        editor = EditText(activity)
+        editor.setText(JavaString(target.text or ""))
+        editor.setHint(JavaString(hint or title))
+        editor.setSingleLine(False)
+        editor.setMinLines(7)
+        editor.setMaxLines(14)
+        editor.setGravity(Gravity.TOP | Gravity.START)
+        editor.setHorizontallyScrolling(False)
+        editor.setPadding(32, 24, 32, 24)
+        editor.setTextSize(18.0)
+        editor.setInputType(
+            InputType.TYPE_CLASS_TEXT
+            | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+        )
+        try:
+            editor.setSelectAllOnFocus(False)
+        except Exception:
+            pass
+
+        def commit_native():
             try:
-                editor.focus = True
-                editor.cursor = (len(editor._lines[-1]) if editor._lines else 0,
-                                 max(0, len(editor._lines)-1))
+                value = str(editor.getText().toString())
             except Exception:
-                try:
-                    editor.focus = True
-                except Exception:
-                    pass
+                value = ""
+            self._apply_native_input_value(index, value)
 
-        Clock.schedule_once(focus_editor, 0.18)
+        def cancel_native():
+            # 不改原值，只释放引用。
+            self._native_dialog_refs = None
+
+        positive = _DialogClickListener(commit_native)
+        negative = _DialogClickListener(cancel_native)
+
+        builder = AlertDialogBuilder(activity)
+        builder.setTitle(JavaString(title))
+        builder.setView(editor)
+        builder.setPositiveButton(JavaString("确定"), positive)
+        builder.setNegativeButton(JavaString("取消"), negative)
+
+        dialog = builder.create()
+
+        # 保留引用，避免 PyJNIus listener 在对话框关闭前被垃圾回收。
+        self._native_dialog_refs = {
+            "dialog": dialog,
+            "editor": editor,
+            "positive": positive,
+            "negative": negative,
+        }
+
+        dialog.show()
+
+        try:
+            window = dialog.getWindow()
+            window.setSoftInputMode(
+                WindowManagerLayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
+                | WindowManagerLayoutParams.SOFT_INPUT_ADJUST_RESIZE
+            )
+        except Exception:
+            pass
+
+        # 原生 EditText 直接请求焦点并显式唤起三星/Android系统键盘。
+        try:
+            editor.requestFocus()
+            editor.setSelection(editor.length())
+            imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE)
+            imm.showSoftInput(editor, InputMethodManager.SHOW_IMPLICIT)
+        except Exception:
+            pass
 
     def on_mode_change(self, _spinner, mode):
         self._unfocus_inputs()
