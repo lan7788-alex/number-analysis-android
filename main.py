@@ -11,6 +11,7 @@ from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.filechooser import FileChooserListView
+from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
@@ -354,9 +355,9 @@ class NumberAnalysisRoot(BoxLayout):
         self.current_view_name = None
         self._native_dialog_refs = None
 
-        # 这三个 TextInput 只作为“数据容器”，不直接放在主界面上。
-        # 主界面改为大按钮 -> 弹出专用输入窗口。
-        # 这样 Android 上不需要反复点小输入框抢焦点。
+        # 这三个 TextInput 只作为“数据容器”，不直接参与触摸输入。
+        # 所有业务输入都改为“纯按钮选择/数字键盘/剪贴板导入”，
+        # 避开 Android/Kivy/输入法的焦点链路。
         self.input1 = MobileTextInput(multiline=True)
         self.input2 = MobileTextInput(multiline=True)
         self.input3 = MobileTextInput(multiline=True)
@@ -403,7 +404,7 @@ class NumberAnalysisRoot(BoxLayout):
         self.input_buttons = []
         for i in range(3):
             btn = Button(
-                text=f"点击输入{i+1}",
+                text=f"点击设置{i+1}",
                 size_hint_y=None,
                 height=dp(60),
                 font_size="15sp",
@@ -562,21 +563,662 @@ class NumberAnalysisRoot(BoxLayout):
                 btn.text = f"{title}：{value}\n（点击修改）"
             else:
                 hint = self._short_preview(self._input_hints[i], 44)
-                btn.text = f"点击输入：{title}\n{hint}"
+                btn.text = f"点击设置：{title}\n{hint}"
 
 
     def open_input_editor(self, index):
         """
-        Android：使用系统原生 AlertDialog + EditText。
-        其它平台：保留 Kivy Popup 作为兼容入口。
+        纯按钮输入总入口。
+
+        不再打开 Android EditText / Kivy TextInput 键盘输入框。
+        需要文字量较大的项目（两位组合、3-7位组合）提供“从剪贴板导入”。
         """
         if not 0 <= index < 3:
             return
 
-        if platform == "android":
-            self._open_native_input_editor(index)
+        mode = self.mode.text
+
+        if mode == "口径1取号" and index == 0:
+            self._open_rule_button_editor(index, allow_multiple=True)
+            return
+
+        if mode == "形态取号" and index == 0:
+            self._open_shape_button_editor(index, "both")
+            return
+
+        if mode == "口径1双条件全量交集" and index in (0, 1):
+            self._open_rule_button_editor(index, allow_multiple=False)
+            return
+
+        if mode == "口径1交集后数字形态轨":
+            if index in (0, 1):
+                self._open_rule_button_editor(index, allow_multiple=False)
+            elif index == 2:
+                self._open_track_button_editor(index)
+            return
+
+        if mode == "形态筛选":
+            if index == 0:
+                self._open_shape_button_editor(index, "size")
+            elif index == 1:
+                self._open_shape_button_editor(index, "parity")
+            return
+
+        if mode in {"两位组合命中筛选（按附件）", "两位组合命中筛选（000-999）"}:
+            if index == 0:
+                self._open_pair_button_editor(index)
+            elif index == 1:
+                self._open_pair_mode_editor(index)
+            return
+
+        if mode == "数字包含 / 去除筛选":
+            if index == 0:
+                self._open_digit_select_editor(index)
+            elif index == 1:
+                self._open_digit_filter_mode_editor(index)
+            return
+
+        if mode == "三至七位拆两位组合" and index == 0:
+            self._open_split_button_editor(index)
+            return
+
+        # 理论上不会走到这里；保留兼容提示，不再调用任何键盘输入框。
+        self._show_message("输入方式", "这个位置当前没有可用的按钮输入面板。")
+
+    def _popup_shell(self, title):
+        """创建统一的纯按钮滚动弹窗。"""
+        outer = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(6))
+        scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False, scroll_timeout=80, scroll_distance=dp(14))
+        body = BoxLayout(
+            orientation="vertical",
+            spacing=dp(6),
+            padding=[dp(2), dp(2), dp(2), dp(8)],
+            size_hint_y=None
+        )
+        body.bind(minimum_height=body.setter("height"))
+        scroll.add_widget(body)
+        outer.add_widget(scroll)
+        popup = Popup(
+            title=title,
+            content=outer,
+            size_hint=(0.97, 0.93),
+            auto_dismiss=False
+        )
+        return popup, body
+
+    def _add_label(self, body, text, height=48, font_size="14sp"):
+        lab = Label(
+            text=text,
+            size_hint_y=None,
+            height=dp(height),
+            halign="left",
+            valign="middle",
+            font_size=font_size
+        )
+        lab.bind(size=lambda inst, val: setattr(inst, "text_size", (max(dp(10), val[0]-dp(8)), None)))
+        body.add_widget(lab)
+        return lab
+
+    def _add_button_grid(self, body, specs, cols=3, height=52):
+        """specs: [(text, callback), ...]"""
+        rows = max(1, (len(specs) + cols - 1) // cols)
+        grid = GridLayout(
+            cols=cols,
+            spacing=dp(5),
+            size_hint_y=None,
+            height=dp(height) * rows + dp(5) * max(0, rows-1)
+        )
+        for txt, cb in specs:
+            b = Button(text=txt, font_size="15sp")
+            b.bind(on_release=cb)
+            grid.add_widget(b)
+        body.add_widget(grid)
+        return grid
+
+    def _open_rule_button_editor(self, index, allow_multiple=False):
+        """口径1条件：数字键 + 大小取位 + 奇偶取位，全程无输入框。"""
+        target = self._input_widgets[index]
+        title = self._input_titles[index]
+        popup, body = self._popup_shell(title)
+
+        existing_lines = [x.strip() for x in target.text.splitlines() if x.strip()]
+        if not allow_multiple and len(existing_lines) > 1:
+            existing_lines = existing_lines[:1]
+
+        state = {
+            "mother": "",
+            "size_pos": None,
+            "parity_pos": None,
+            "lines": list(existing_lines),
+        }
+
+        # 单条件编辑时，尝试把已有值载入按钮状态。
+        if not allow_multiple and existing_lines:
+            parsed, err = parse_koujing1(existing_lines[0])
+            if not err:
+                state["mother"] = parsed["mother"]
+                state["size_pos"] = parsed["size_pos"]
+                state["parity_pos"] = parsed["parity_pos"]
+
+        preview = self._add_label(body, "", height=72, font_size="16sp")
+        self._add_label(body, "① 点数字组成3位母号", height=40)
+
+        digit_specs = []
+        for d in "1234567890":
+            def make_digit_cb(x):
+                def cb(*_):
+                    if len(state["mother"]) < 3:
+                        state["mother"] += x
+                        refresh()
+                return cb
+            digit_specs.append((d, make_digit_cb(d)))
+        self._add_button_grid(body, digit_specs, cols=5, height=50)
+
+        row_specs = [
+            ("退一位", lambda *_: (state.__setitem__("mother", state["mother"][:-1]), refresh())),
+            ("清空母号", lambda *_: (state.__setitem__("mother", ""), refresh())),
+        ]
+        self._add_button_grid(body, row_specs, cols=2, height=50)
+
+        self._add_label(body, "② 选择大小取位", height=38)
+        size_buttons = {}
+        size_grid = GridLayout(cols=3, spacing=dp(5), size_hint_y=None, height=dp(52))
+        for pos in ("百十", "百个", "十个"):
+            b = Button(text=pos, font_size="15sp")
+            size_buttons[pos] = b
+            def choose_size(_btn, p=pos):
+                state["size_pos"] = p
+                refresh()
+            b.bind(on_release=choose_size)
+            size_grid.add_widget(b)
+        body.add_widget(size_grid)
+
+        self._add_label(body, "③ 选择奇偶取位", height=38)
+        parity_buttons = {}
+        parity_grid = GridLayout(cols=3, spacing=dp(5), size_hint_y=None, height=dp(52))
+        for pos in ("百十", "百个", "十个"):
+            b = Button(text=pos, font_size="15sp")
+            parity_buttons[pos] = b
+            def choose_parity(_btn, p=pos):
+                state["parity_pos"] = p
+                refresh()
+            b.bind(on_release=choose_parity)
+            parity_grid.add_widget(b)
+        body.add_widget(parity_grid)
+
+        def build_current():
+            if len(state["mother"]) != 3 or not state["size_pos"] or not state["parity_pos"]:
+                return None
+            if state["size_pos"] == state["parity_pos"]:
+                return state["mother"] + state["size_pos"]
+            return (
+                state["mother"]
+                + "大小" + state["size_pos"]
+                + "奇偶" + state["parity_pos"]
+            )
+
+        def refresh():
+            cur = build_current()
+            current_text = cur or (
+                f"母号：{state['mother'] or '未完成'}；"
+                f"大小：{state['size_pos'] or '未选'}；"
+                f"奇偶：{state['parity_pos'] or '未选'}"
+            )
+            if allow_multiple:
+                saved = "\n".join(state["lines"]) if state["lines"] else "暂无"
+                preview.text = f"当前：{current_text}\n已保存：{saved}"
+            else:
+                preview.text = f"当前条件：{current_text}"
+            for p, b in size_buttons.items():
+                b.text = ("✓ " if state["size_pos"] == p else "") + p
+            for p, b in parity_buttons.items():
+                b.text = ("✓ " if state["parity_pos"] == p else "") + p
+
+        if allow_multiple:
+            def add_line(*_):
+                cur = build_current()
+                if not cur:
+                    self._show_message("条件未完成", "请先输入3位母号，并选择大小取位和奇偶取位。")
+                    return
+                state["lines"].append(cur)
+                state["mother"] = ""
+                state["size_pos"] = None
+                state["parity_pos"] = None
+                refresh()
+
+            def delete_last(*_):
+                if state["lines"]:
+                    state["lines"].pop()
+                refresh()
+
+            self._add_button_grid(body, [
+                ("添加本条", add_line),
+                ("删除末条", delete_last),
+                ("清空全部", lambda *_: (state["lines"].clear(), state.__setitem__("mother", ""), state.__setitem__("size_pos", None), state.__setitem__("parity_pos", None), refresh())),
+            ], cols=3, height=52)
+
+            def commit(*_):
+                cur = build_current()
+                if cur:
+                    state["lines"].append(cur)
+                if not state["lines"]:
+                    self._show_message("没有条件", "请至少添加1条口径1条件。")
+                    return
+                target.text = "\n".join(state["lines"])
+                self._update_input_buttons()
+                popup.dismiss()
         else:
-            self._open_kivy_input_editor(index)
+            def commit(*_):
+                cur = build_current()
+                if not cur:
+                    self._show_message("条件未完成", "请先输入3位母号，并选择大小取位和奇偶取位。")
+                    return
+                target.text = cur
+                self._update_input_buttons()
+                popup.dismiss()
+
+        self._add_button_grid(body, [
+            ("确定", commit),
+            ("取消", lambda *_: popup.dismiss()),
+        ], cols=2, height=56)
+
+        refresh()
+        popup.open()
+
+    def _open_shape_button_editor(self, index, kind="both"):
+        """大小/奇偶形态直接点选，完全不用键盘。"""
+        target = self._input_widgets[index]
+        popup, body = self._popup_shell(self._input_titles[index])
+
+        allowed = []
+        if kind in ("both", "size"):
+            allowed += SIZE_SHAPES
+        if kind in ("both", "parity"):
+            allowed += PARITY_SHAPES
+
+        selected = {x for x in allowed if x in (target.text or "")}
+        status = self._add_label(body, "", height=60, font_size="15sp")
+        buttons = {}
+
+        def refresh():
+            for shape, b in buttons.items():
+                b.text = ("✓ " if shape in selected else "") + shape
+            s = [x for x in SIZE_SHAPES if x in selected]
+            p = [x for x in PARITY_SHAPES if x in selected]
+            parts = []
+            if kind in ("both", "size"):
+                parts.append(f"大小已选 {len(s)} 个")
+            if kind in ("both", "parity"):
+                parts.append(f"奇偶已选 {len(p)} 个")
+            status.text = "；".join(parts) + "\n再次点击可取消。"
+
+        def add_shape_section(label_text, shapes):
+            self._add_label(body, label_text, height=38)
+            grid = GridLayout(cols=2, spacing=dp(5), size_hint_y=None, height=dp(49)*4 + dp(15))
+            for shape in shapes:
+                b = Button(text=shape, font_size="15sp")
+                buttons[shape] = b
+                def toggle(_btn, s=shape):
+                    if s in selected:
+                        selected.remove(s)
+                    else:
+                        selected.add(s)
+                    refresh()
+                b.bind(on_release=toggle)
+                grid.add_widget(b)
+            body.add_widget(grid)
+
+        if kind in ("both", "size"):
+            add_shape_section("大小形态", SIZE_SHAPES)
+        if kind in ("both", "parity"):
+            add_shape_section("奇偶形态", PARITY_SHAPES)
+
+        def select_all(*_):
+            selected.update(allowed)
+            refresh()
+
+        def clear_all(*_):
+            selected.clear()
+            refresh()
+
+        def commit(*_):
+            ordered = [x for x in SIZE_SHAPES + PARITY_SHAPES if x in selected]
+            target.text = "\n".join(ordered)
+            self._update_input_buttons()
+            popup.dismiss()
+
+        self._add_button_grid(body, [
+            ("全选", select_all),
+            ("清空", clear_all),
+            ("确定", commit),
+            ("取消", lambda *_: popup.dismiss()),
+        ], cols=2, height=52)
+        refresh()
+        popup.open()
+
+    def _open_track_button_editor(self, index):
+        """数字形态轨：点选数字 + 4个形态。"""
+        target = self._input_widgets[index]
+        popup, body = self._popup_shell(self._input_titles[index])
+
+        lines = [x.strip() for x in target.text.splitlines() if x.strip()]
+        selected_digits = set(parse_digit_track(lines[0]) if lines else [])
+        selected_shapes = [x for x in lines[1:5] if classify_shape_token(x)] if len(lines) > 1 else []
+
+        status = self._add_label(body, "", height=62, font_size="15sp")
+        digit_buttons = {}
+        shape_buttons = {}
+
+        self._add_label(body, "① 点选数字轨目标（可多选）", height=38)
+        dgrid = GridLayout(cols=5, spacing=dp(5), size_hint_y=None, height=dp(105))
+        for d in "0123456789":
+            b = Button(text=d, font_size="16sp")
+            digit_buttons[d] = b
+            def toggle_digit(_btn, x=d):
+                if x in selected_digits:
+                    selected_digits.remove(x)
+                else:
+                    selected_digits.add(x)
+                refresh()
+            b.bind(on_release=toggle_digit)
+            dgrid.add_widget(b)
+        body.add_widget(dgrid)
+
+        self._add_label(body, "② 点选4个形态轨（大小/奇偶可混合）", height=42)
+        sgrid = GridLayout(cols=2, spacing=dp(5), size_hint_y=None, height=dp(49)*8 + dp(35))
+        for shape in SIZE_SHAPES + PARITY_SHAPES:
+            b = Button(text=shape, font_size="15sp")
+            shape_buttons[shape] = b
+            def toggle_shape(_btn, s=shape):
+                if s in selected_shapes:
+                    selected_shapes.remove(s)
+                else:
+                    if len(selected_shapes) >= 4:
+                        self._show_message("最多4个形态", "形态轨固定选择4个。请先取消一个再选新的。")
+                        return
+                    selected_shapes.append(s)
+                refresh()
+            b.bind(on_release=toggle_shape)
+            sgrid.add_widget(b)
+        body.add_widget(sgrid)
+
+        def refresh():
+            for d, b in digit_buttons.items():
+                b.text = ("✓ " if d in selected_digits else "") + d
+            for s, b in shape_buttons.items():
+                b.text = ("✓ " if s in selected_shapes else "") + s
+            status.text = (
+                "数字：" + (" ".join(sorted(selected_digits)) if selected_digits else "未选")
+                + f"\n形态：{len(selected_shapes)}/4 "
+                + ("、".join(selected_shapes) if selected_shapes else "未选")
+            )
+
+        def commit(*_):
+            if not selected_digits:
+                self._show_message("数字未选择", "请至少选择1个数字轨目标。")
+                return
+            if len(selected_shapes) != 4:
+                self._show_message("形态数量不对", "形态轨必须正好选择4个形态。")
+                return
+            target.text = "数字" + "".join(sorted(selected_digits)) + "\n" + "\n".join(selected_shapes)
+            self._update_input_buttons()
+            popup.dismiss()
+
+        self._add_button_grid(body, [
+            ("清空全部", lambda *_: (selected_digits.clear(), selected_shapes.clear(), refresh())),
+            ("确定", commit),
+            ("取消", lambda *_: popup.dismiss()),
+        ], cols=3, height=52)
+        refresh()
+        popup.open()
+
+    def _open_pair_button_editor(self, index):
+        """两位组合：数字按钮手动添加，或从剪贴板一键导入。"""
+        target = self._input_widgets[index]
+        popup, body = self._popup_shell(self._input_titles[index])
+
+        pairs = sorted(parse_pair_conditions(target.text))
+        buffer = {"text": ""}
+        status = self._add_label(body, "", height=92, font_size="14sp")
+
+        def refresh():
+            preview = " ".join(pairs[:35])
+            if len(pairs) > 35:
+                preview += " ……"
+            status.text = (
+                f"当前两位：{buffer['text'] or '未输入'}\n"
+                f"已选 {len(pairs)} 组：{preview or '暂无'}"
+            )
+
+        def add_digit(d):
+            if len(buffer["text"]) >= 2:
+                buffer["text"] = ""
+            buffer["text"] += d
+            if len(buffer["text"]) == 2:
+                p = canonical_pair(buffer["text"])
+                if p and p not in pairs:
+                    pairs.append(p)
+                    pairs.sort()
+                buffer["text"] = ""
+            refresh()
+
+        specs = []
+        for d in "0123456789":
+            specs.append((d, lambda _b, x=d: add_digit(x)))
+        self._add_button_grid(body, specs, cols=5, height=50)
+
+        def import_clip(*_):
+            clip = Clipboard.paste() or ""
+            found = sorted(parse_pair_conditions(clip))
+            if not found:
+                self._show_message("剪贴板没有两位组合", "请先复制类似 01 03 15 68 的两位组合。")
+                return
+            pairs[:] = found
+            buffer["text"] = ""
+            refresh()
+
+        def remove_last(*_):
+            if pairs:
+                pairs.pop()
+            refresh()
+
+        def commit(*_):
+            if not pairs:
+                self._show_message("没有两位组合", "请手动点数字添加，或从剪贴板导入。")
+                return
+            target.text = " ".join(sorted(set(pairs)))
+            self._update_input_buttons()
+            popup.dismiss()
+
+        self._add_button_grid(body, [
+            ("从剪贴板导入", import_clip),
+            ("删除末组", remove_last),
+            ("清空全部", lambda *_: (pairs.clear(), buffer.__setitem__("text", ""), refresh())),
+            ("确定", commit),
+            ("取消", lambda *_: popup.dismiss()),
+        ], cols=2, height=52)
+        refresh()
+        popup.open()
+
+    def _open_pair_mode_editor(self, index):
+        target = self._input_widgets[index]
+        popup, body = self._popup_shell(self._input_titles[index])
+        self._add_label(body, "选择两位命中模式，点击后直接保存。", height=48)
+
+        def choose(value):
+            target.text = value
+            self._update_input_buttons()
+            popup.dismiss()
+
+        self._add_button_grid(body, [
+            ("至少2对命中", lambda *_: choose("至少2对")),
+            ("恰好2对命中", lambda *_: choose("恰好2对")),
+            ("三对全命中", lambda *_: choose("三对全命中")),
+            ("取消", lambda *_: popup.dismiss()),
+        ], cols=1, height=56)
+        popup.open()
+
+    def _open_digit_select_editor(self, index):
+        target = self._input_widgets[index]
+        popup, body = self._popup_shell(self._input_titles[index])
+        selected = {c for c in target.text if c.isdigit()}
+        status = self._add_label(body, "", height=55, font_size="15sp")
+        buttons = {}
+
+        grid = GridLayout(cols=5, spacing=dp(5), size_hint_y=None, height=dp(105))
+        for d in "0123456789":
+            b = Button(text=d, font_size="16sp")
+            buttons[d] = b
+            def toggle(_btn, x=d):
+                if x in selected:
+                    selected.remove(x)
+                else:
+                    selected.add(x)
+                refresh()
+            b.bind(on_release=toggle)
+            grid.add_widget(b)
+        body.add_widget(grid)
+
+        def refresh():
+            for d, b in buttons.items():
+                b.text = ("✓ " if d in selected else "") + d
+            status.text = "已选数字：" + (" ".join(sorted(selected)) if selected else "暂无")
+
+        def commit(*_):
+            if not selected:
+                self._show_message("没有数字", "请至少选择1个数字。")
+                return
+            target.text = "".join(sorted(selected))
+            self._update_input_buttons()
+            popup.dismiss()
+
+        self._add_button_grid(body, [
+            ("清空", lambda *_: (selected.clear(), refresh())),
+            ("确定", commit),
+            ("取消", lambda *_: popup.dismiss()),
+        ], cols=3, height=52)
+        refresh()
+        popup.open()
+
+    def _open_digit_filter_mode_editor(self, index):
+        target = self._input_widgets[index]
+        popup, body = self._popup_shell(self._input_titles[index])
+        lines = [x.strip() for x in target.text.splitlines() if x.strip()]
+        state = {
+            "match": "全部" if lines and "全部" in lines[0] else "任意",
+            "action": "去掉" if len(lines) > 1 and "去" in lines[1] else "筛出",
+        }
+        status = self._add_label(body, "", height=55, font_size="15sp")
+        mbuttons, abuttons = {}, {}
+
+        self._add_label(body, "判断方式", height=36)
+        g1 = GridLayout(cols=2, spacing=dp(5), size_hint_y=None, height=dp(52))
+        for v in ("任意", "全部"):
+            b = Button(text=v)
+            mbuttons[v] = b
+            b.bind(on_release=lambda _b, x=v: (state.__setitem__("match", x), refresh()))
+            g1.add_widget(b)
+        body.add_widget(g1)
+
+        self._add_label(body, "操作方式", height=36)
+        g2 = GridLayout(cols=2, spacing=dp(5), size_hint_y=None, height=dp(52))
+        for v in ("筛出", "去掉"):
+            b = Button(text=v)
+            abuttons[v] = b
+            b.bind(on_release=lambda _b, x=v: (state.__setitem__("action", x), refresh()))
+            g2.add_widget(b)
+        body.add_widget(g2)
+
+        def refresh():
+            for v,b in mbuttons.items():
+                b.text = ("✓ " if state["match"] == v else "") + v
+            for v,b in abuttons.items():
+                b.text = ("✓ " if state["action"] == v else "") + v
+            status.text = f"当前：{state['match']} + {state['action']}"
+
+        def commit(*_):
+            target.text = state["match"] + "\n" + state["action"]
+            self._update_input_buttons()
+            popup.dismiss()
+
+        self._add_button_grid(body, [
+            ("确定", commit),
+            ("取消", lambda *_: popup.dismiss()),
+        ], cols=2, height=54)
+        refresh()
+        popup.open()
+
+    def _open_split_button_editor(self, index):
+        """3-7位：数字按钮逐组添加，或从剪贴板导入；最终仍只输出合并去重结果。"""
+        target = self._input_widgets[index]
+        popup, body = self._popup_shell(self._input_titles[index])
+        groups = parse_split_inputs(target.text)
+        buffer = {"text": ""}
+        status = self._add_label(body, "", height=105, font_size="14sp")
+
+        def refresh():
+            shown = "、".join(groups[:18])
+            if len(groups) > 18:
+                shown += "……"
+            status.text = (
+                f"当前组：{buffer['text'] or '未输入'}（3-7位）\n"
+                f"已添加 {len(groups)} 组：{shown or '暂无'}"
+            )
+
+        def add_digit(d):
+            if len(buffer["text"]) < 7:
+                buffer["text"] += d
+            refresh()
+
+        specs = [(d, lambda _b, x=d: add_digit(x)) for d in "0123456789"]
+        self._add_button_grid(body, specs, cols=5, height=50)
+
+        def add_group(*_):
+            s = buffer["text"]
+            if not (3 <= len(s) <= 7):
+                self._show_message("位数不对", "每组必须是3-7位数字。")
+                return
+            groups.append(s)
+            buffer["text"] = ""
+            refresh()
+
+        def import_clip(*_):
+            clip = Clipboard.paste() or ""
+            found = parse_split_inputs(clip)
+            if not found:
+                self._show_message("剪贴板没有3-7位数字", "请先复制3-7位数字，例如：345 4567 1234567。")
+                return
+            groups[:] = found
+            buffer["text"] = ""
+            refresh()
+
+        def commit(*_):
+            if buffer["text"]:
+                if 3 <= len(buffer["text"]) <= 7:
+                    groups.append(buffer["text"])
+                    buffer["text"] = ""
+                else:
+                    self._show_message("当前组未完成", "当前组必须是3-7位数字，或者先点“退一位/清空当前”。")
+                    return
+            if not groups:
+                self._show_message("没有数据", "请至少添加1组3-7位数字。")
+                return
+            target.text = "\n".join(groups)
+            self._update_input_buttons()
+            popup.dismiss()
+
+        self._add_button_grid(body, [
+            ("添加本组", add_group),
+            ("退一位", lambda *_: (buffer.__setitem__("text", buffer["text"][:-1]), refresh())),
+            ("清空当前", lambda *_: (buffer.__setitem__("text", ""), refresh())),
+            ("删除末组", lambda *_: (groups.pop() if groups else None, refresh())),
+            ("从剪贴板导入", import_clip),
+            ("清空全部", lambda *_: (groups.clear(), buffer.__setitem__("text", ""), refresh())),
+            ("确定", commit),
+            ("取消", lambda *_: popup.dismiss()),
+        ], cols=2, height=52)
+        refresh()
+        popup.open()
 
     def _open_kivy_input_editor(self, index):
         """桌面/非Android备用输入窗口。"""
