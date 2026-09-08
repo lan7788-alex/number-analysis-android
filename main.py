@@ -2574,7 +2574,14 @@ class NumberAnalysisRoot(BoxLayout):
             if err:
                 out.append(f"{line}：{err}")
                 continue
+
             r = run_koujing1_normal(p["mother"], p["size_pos"], p["parity_pos"])
+
+            # 口径1未入选：000-999 中除去“全量正常出号”的全部组合。
+            # ALL_NUMBERS 本身已按 000 -> 999 升序，因此结果天然保持升序。
+            full_set = set(r["full"])
+            not_selected = [n for n in ALL_NUMBERS if n not in full_set]
+
             out += [
                 f"【{line}】",
                 f"母号大小：{r['mother_size']}",
@@ -2582,18 +2589,24 @@ class NumberAnalysisRoot(BoxLayout):
                 "大小正常入选6形态：" + "、".join(r["allowed_size"]),
                 "奇偶正常入选6形态：" + "、".join(r["allowed_parity"]),
                 f"全量正常出号：{len(r['full'])} 注",
+                f"未入选组合：{len(not_selected)} 注",
                 f"二同+三同：{len(r['same23'])} 注",
                 f"三不同：{len(r['different'])} 注",
-                f"闭环：{len(r['same23'])} + {len(r['different'])} = {len(r['full'])} √",
+                f"入选闭环：{len(r['same23'])} + {len(r['different'])} = {len(r['full'])} √",
+                f"总量闭环：{len(r['full'])} + {len(not_selected)} = 1000 √",
                 section_text("全量", r["full"]),
+                section_text("未入选组合", not_selected),
                 section_text("二同+三同", r["same23"]),
                 section_text("三不同", r["different"]),
                 ""
             ]
+
             base = normalize_rule_text(line)
             exports[f"{base}_全量_{len(r['full'])}注"] = r["full"]
+            exports[f"{base}_未入选_{len(not_selected)}注"] = not_selected
             exports[f"{base}_二同三同_{len(r['same23'])}注"] = r["same23"]
             exports[f"{base}_三不同_{len(r['different'])}注"] = r["different"]
+
         self.result.text = "\n".join(out)
         self.set_exports(**exports)
 
