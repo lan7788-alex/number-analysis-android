@@ -134,6 +134,8 @@ MODES = [
     "数字包含 / 去除筛选",
     "三至七位拆两位组合",
     "半顺以上筛选",
+    "多附件频次统计",
+    "百十个定位取号",
 ]
 
 
@@ -156,6 +158,45 @@ def pair_section_text(title, pairs):
     pairs = sorted(set(pairs))
     body = "\n".join(" ".join(pairs[i:i+10]) for i in range(0, len(pairs), 10)) if pairs else "（无）"
     return f"【{title}】{len(pairs)}组\n{body}"
+
+
+def parse_position_specs(text):
+    """
+    解析“百十个定位”条件。
+
+    支持标准形式：百379十02468个034
+    也允许空格、斜杠和行尾附加文字，例如：百379十02468个034/679各打1米。
+    斜杠仅作为同一位置的数字分隔，最终按数字集合去重。
+    返回 [(canonical, hundreds, tens, ones), ...]。
+    """
+    specs = []
+    pattern = re.compile(r"百\s*([0-9/／]+)\s*十\s*([0-9/／]+)\s*个\s*([0-9/／]+)")
+
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        for m in pattern.finditer(line):
+            groups = []
+            valid = True
+            for raw in m.groups():
+                digits = sorted(set(re.findall(r"\d", raw)))
+                if not digits:
+                    valid = False
+                    break
+                groups.append(digits)
+            if not valid:
+                continue
+            h, t, o = groups
+            canonical = f"百{''.join(h)}十{''.join(t)}个{''.join(o)}"
+            specs.append((canonical, h, t, o))
+    return specs
+
+
+def position_spec_numbers(hundreds, tens, ones):
+    """按百/十/个三个数字集合生成三位组合，自动升序去重。"""
+    return sorted({h + t + o for h in hundreds for t in tens for o in ones})
+
 
 def size_shape(num):
     return "".join("大" if int(d) >= 5 else "小" for d in num)
@@ -650,6 +691,7 @@ class NumberAnalysisRoot(BoxLayout):
             "两位组合命中筛选（000-999）": ["两位组合", "命中模式"],
             "数字包含 / 去除筛选": ["目标数字", "筛选模式"],
             "三至七位拆两位组合": ["3-7位数字"],
+            "百十个定位取号": ["百十个定位条件"],
         }
         vals = titles.get(mode, [])
         vals = vals + [f"输入{i+1}" for i in range(len(vals), 3)]
@@ -769,6 +811,10 @@ class NumberAnalysisRoot(BoxLayout):
 
         if mode == "三至七位拆两位组合" and index == 0:
             self._open_split_button_editor(index)
+            return
+
+        if mode == "百十个定位取号" and index == 0:
+            self._open_position_button_editor(index)
             return
 
         # 理论上不会走到这里；保留兼容提示，不再调用任何键盘输入框。
@@ -1538,6 +1584,139 @@ class NumberAnalysisRoot(BoxLayout):
         except Exception:
             pass
 
+
+    def _open_position_button_editor(self, index):
+        """
+        百十个定位：三个位置分别点选0-9，可保存多组；全程不用键盘。
+        同时支持“从剪贴板导入”多行百十个条件。
+        """
+        target = self._input_widgets[index]
+        popup, body = self._popup_shell(self._input_titles[index])
+
+        existing = [x[0] for x in parse_position_specs(target.text)]
+        state = {
+            "百": set(),
+            "十": set(),
+            "个": set(),
+            "lines": list(existing),
+        }
+
+        status = self._add_label(body, "", height=78, font_size="14sp")
+        buttons = {"百": {}, "十": {}, "个": {}}
+
+        def current_line():
+            if not state["百"] or not state["十"] or not state["个"]:
+                return None
+            return (
+                "百" + "".join(sorted(state["百"]))
+                + "十" + "".join(sorted(state["十"]))
+                + "个" + "".join(sorted(state["个"]))
+            )
+
+        def refresh():
+            for pos in ("百", "十", "个"):
+                for d, b in buttons[pos].items():
+                    b.text = ("✓ " if d in state[pos] else "") + d
+
+            cur = current_line()
+            saved = state["lines"]
+            if len(saved) <= 3:
+                saved_text = "；".join(saved) if saved else "暂无"
+            else:
+                saved_text = "；".join(saved[-3:]) + f"；……共{len(saved)}组"
+
+            selected_text = (
+                f"百：{''.join(sorted(state['百'])) or '未选'}  "
+                f"十：{''.join(sorted(state['十'])) or '未选'}  "
+                f"个：{''.join(sorted(state['个'])) or '未选'}"
+            )
+            status.text = (
+                selected_text
+                + "\n当前：" + (cur or "三个位置都至少选1个数字")
+                + "\n已保存：" + saved_text
+            )
+
+        for pos in ("百", "十", "个"):
+            self._add_label(body, f"{pos}位：点选数字（可多选）", height=32)
+            grid = GridLayout(
+                cols=5,
+                spacing=dp(4),
+                size_hint_y=None,
+                height=dp(86)
+            )
+            for d in "0123456789":
+                b = Button(text=d, font_size="15sp")
+                buttons[pos][d] = b
+
+                def toggle(_btn, p=pos, x=d):
+                    if x in state[p]:
+                        state[p].remove(x)
+                    else:
+                        state[p].add(x)
+                    refresh()
+
+                b.bind(on_release=toggle)
+                grid.add_widget(b)
+            body.add_widget(grid)
+
+        def clear_current():
+            state["百"].clear()
+            state["十"].clear()
+            state["个"].clear()
+            refresh()
+
+        def add_current(*_):
+            cur = current_line()
+            if not cur:
+                self._show_message("条件未完成", "百位、十位、个位都至少选择1个数字。")
+                return
+            state["lines"].append(cur)
+            clear_current()
+
+        def delete_last(*_):
+            if state["lines"]:
+                state["lines"].pop()
+            refresh()
+
+        def import_clip(*_):
+            clip = Clipboard.paste() or ""
+            found = [x[0] for x in parse_position_specs(clip)]
+            if not found:
+                self._show_message(
+                    "剪贴板没有定位条件",
+                    "请先复制类似：百379十02468个034 的内容。"
+                )
+                return
+            state["lines"].extend(found)
+            refresh()
+
+        self._add_button_grid(body, [
+            ("添加本组", add_current),
+            ("删除末组", delete_last),
+            ("清空当前", lambda *_: clear_current()),
+            ("从剪贴板导入", import_clip),
+            ("清空全部", lambda *_: (state["lines"].clear(), clear_current())),
+        ], cols=3, height=46)
+
+        def commit(*_):
+            cur = current_line()
+            if cur:
+                state["lines"].append(cur)
+            if not state["lines"]:
+                self._show_message("没有定位条件", "请至少添加1组百十个定位条件。")
+                return
+            target.text = "\n".join(state["lines"])
+            self._update_input_buttons()
+            popup.dismiss()
+
+        self._add_button_grid(body, [
+            ("确定", commit),
+            ("取消", lambda *_: popup.dismiss()),
+        ], cols=2, height=50)
+
+        refresh()
+        popup.open()
+
     def on_mode_change(self, _spinner, mode):
         self._unfocus_inputs()
         self._reset_file_roles()
@@ -1623,6 +1802,15 @@ class NumberAnalysisRoot(BoxLayout):
                 0, True,
                 "", "", ""
             ),
+            "多附件频次统计": (
+                0, True,
+                "", "", ""
+            ),
+            "百十个定位取号": (
+                1, False,
+                "点选百/十/个位数字，可添加多组；也可从剪贴板导入",
+                "", ""
+            ),
         }
 
         input_count, need_file, h1, h2, h3 = config[mode]
@@ -1636,8 +1824,12 @@ class NumberAnalysisRoot(BoxLayout):
             extra = " 先选择A，再添加B/C/D附件。"
         elif mode == "合并去重":
             extra = " 添加2个以上附件，不区分角色。"
+        elif mode == "多附件频次统计":
+            extra = " 添加2个以上附件；同一组合在同一附件内只计1次。"
+        elif mode == "百十个定位取号":
+            extra = " 点击下面的设置按钮，直接点选百/十/个位数字，不用键盘。"
         elif input_count:
-            extra = " 点击下面的大输入按钮，弹窗会自动打开键盘。"
+            extra = " 点击下面的大输入按钮设置条件。"
 
         self.instructions.text = "本次只使用当前输入和当前附件。" + extra
 
@@ -1664,6 +1856,7 @@ class NumberAnalysisRoot(BoxLayout):
             "交集 / 不交集",
             "A分别与多个文件交集",
             "合并去重",
+            "多附件频次统计",
             "形态筛选",
             "二同 / 三同 / 三不同",
             "两位组合命中筛选（按附件）",
@@ -1694,7 +1887,7 @@ class NumberAnalysisRoot(BoxLayout):
             target = "A" if self.file_A is None else "B"
         elif mode == "A分别与多个文件交集":
             target = "A" if self.file_A is None else "others"
-        elif mode == "合并去重":
+        elif mode in {"合并去重", "多附件频次统计"}:
             target = "append"
         else:
             target = "single"
@@ -1730,7 +1923,7 @@ class NumberAnalysisRoot(BoxLayout):
             )
             return
 
-        if mode == "合并去重":
+        if mode in {"合并去重", "多附件频次统计"}:
             self.loaded_files = list(self.file_others)
             return
 
@@ -1783,7 +1976,7 @@ class NumberAnalysisRoot(BoxLayout):
                 make_button("添加B/C/D附件", lambda *_: self.select_file_role("others"))
             )
 
-        elif mode == "合并去重":
+        elif mode in {"合并去重", "多附件频次统计"}:
             self.file_button_row.add_widget(
                 make_button("添加附件", lambda *_: self.select_file_role("append"))
             )
@@ -1873,7 +2066,7 @@ class NumberAnalysisRoot(BoxLayout):
         if mode == "交集 / 不交集":
             return "exact", 2
 
-        if mode in {"A分别与多个文件交集", "合并去重"}:
+        if mode in {"A分别与多个文件交集", "合并去重", "多附件频次统计"}:
             return "minimum", 2
 
         if mode in {
@@ -2201,7 +2394,7 @@ class NumberAnalysisRoot(BoxLayout):
             self.files_label.text = "；".join(lines)
             return
 
-        if mode == "合并去重":
+        if mode in {"合并去重", "多附件频次统计"}:
             if not self.file_others:
                 self.files_label.text = "未选择附件"
             else:
@@ -2779,7 +2972,7 @@ class NumberAnalysisRoot(BoxLayout):
                 )
                 return False
 
-        elif mode == "合并去重":
+        elif mode in {"合并去重", "多附件频次统计"}:
             if len(self.file_others) < 2:
                 self.result.text = (
                     f"至少需要2个TXT附件，目前 {len(self.file_others)} 个。"
@@ -3066,6 +3259,120 @@ class NumberAnalysisRoot(BoxLayout):
             f"全顺_{len(full)}注": full,
             f"非半顺以上_{len(non)}注": non,
         })
+
+
+    def do_15(self):
+        """多附件频次统计：按“出现于几个附件”计频次，每个附件内部先去重。"""
+        if not self.need_files(minimum=2):
+            return
+
+        self._sync_loaded_files()
+        datasets = []
+        file_rows = []
+        for path in self.loaded_files:
+            nums = set(self.read_file(path))
+            datasets.append(nums)
+            file_rows.append((os.path.basename(path), len(nums)))
+
+        frequency = {}
+        for nums in datasets:
+            for n in nums:
+                frequency[n] = frequency.get(n, 0) + 1
+
+        n_files = len(datasets)
+        buckets = {
+            k: sorted(n for n, c in frequency.items() if c == k)
+            for k in range(1, n_files + 1)
+        }
+        union = sorted(frequency)
+        one_two = sorted(set(buckets.get(1, [])) | set(buckets.get(2, [])))
+
+        # 两个闭环：
+        # 1) 各频次桶的“不同组合数”合计 = 总并集数
+        # 2) 频次×桶注数的加权和 = 各附件内部去重后的注数总和
+        bucket_total = sum(len(v) for v in buckets.values())
+        weighted_total = sum(k * len(v) for k, v in buckets.items())
+        file_total = sum(len(nums) for nums in datasets)
+
+        out = [
+            f"附件数量：{n_files} 个",
+            "频次口径：同一组合出现在1个附件=1次；同一附件内部重复只计1次。",
+        ]
+        for idx, (name, count) in enumerate(file_rows, start=1):
+            out.append(f"附件{idx}：{name} = {count} 注")
+        out.append("")
+
+        for k in range(1, n_files + 1):
+            out.append(f"出现{k}次：{len(buckets[k])} 注")
+        out += [
+            f"出现1/2次合并：{len(one_two)} 注",
+            f"全部并集：{len(union)} 注",
+            f"闭环1：各频次桶合计 {bucket_total} = 并集 {len(union)} √",
+            f"闭环2：Σ(频次×注数) {weighted_total} = 各附件注数合计 {file_total} √",
+        ]
+
+        for k in range(1, n_files + 1):
+            out.append(section_text(f"出现{k}次", buckets[k]))
+        out.append(section_text("出现1/2次合并", one_two))
+        out.append(section_text("全部并集", union))
+
+        self.result.text = "\n".join(out)
+
+        exports = {}
+        for k in range(1, n_files + 1):
+            exports[f"频次_出现{k}次_{len(buckets[k])}注"] = buckets[k]
+        exports[f"频次_出现1或2次合并_{len(one_two)}注"] = one_two
+        exports[f"频次_全部并集_{len(union)}注"] = union
+        self.set_exports(**exports)
+
+    def do_16(self):
+        """百十个定位取号：支持多组，逐组生成并给出总合并去重与闭环。"""
+        specs = parse_position_specs(self.input1.text)
+        if not specs:
+            self.result.text = "请至少设置1组百十个定位条件。"
+            return
+
+        out = [f"定位组数：{len(specs)} 组"]
+        exports = {}
+        all_occurrences = []
+        combo_group_count = {}
+
+        for idx, (canonical, hundreds, tens, ones) in enumerate(specs, start=1):
+            nums = position_spec_numbers(hundreds, tens, ones)
+            expected = len(hundreds) * len(tens) * len(ones)
+
+            out += [
+                f"第{idx}组：{canonical}",
+                f"计算：{len(hundreds)}×{len(tens)}×{len(ones)} = {expected} 注",
+                f"本组实际：{len(nums)} 注，闭环 √" if len(nums) == expected else f"本组实际：{len(nums)} 注，闭环需复核",
+                section_text(f"第{idx}组 {canonical}", nums),
+            ]
+
+            exports[f"定位第{idx}组_{canonical}_{len(nums)}注"] = nums
+            all_occurrences.extend(nums)
+            for n in nums:
+                combo_group_count[n] = combo_group_count.get(n, 0) + 1
+
+        merged = sorted(set(all_occurrences))
+        repeated = sorted(n for n, c in combo_group_count.items() if c >= 2)
+        raw_total = len(all_occurrences)
+        duplicate_occurrences = raw_total - len(merged)
+
+        out += [
+            f"各组注数合计（未去重）：{raw_total} 注",
+            f"全部合并去重：{len(merged)} 注",
+            f"重复出现量：{duplicate_occurrences} 注",
+            f"跨组重复组合：{len(repeated)} 注",
+            f"总闭环：{len(merged)} + {duplicate_occurrences} = {raw_total} √",
+            section_text("全部合并去重", merged),
+            section_text("跨组重复组合", repeated),
+        ]
+
+        exports[f"百十个定位_全部合并去重_{len(merged)}注"] = merged
+        exports[f"百十个定位_跨组重复组合_{len(repeated)}注"] = repeated
+
+        self.result.text = "\n".join(out)
+        self.set_exports(**exports)
 
 
 class NumberAnalysisApp(App):
