@@ -136,6 +136,7 @@ MODES = [
     "半顺以上筛选",
     "多附件频次统计",
     "百十个定位取号",
+    "口径1入选未入选交叉",
 ]
 
 
@@ -692,6 +693,7 @@ class NumberAnalysisRoot(BoxLayout):
             "数字包含 / 去除筛选": ["目标数字", "筛选模式"],
             "三至七位拆两位组合": ["3-7位数字"],
             "百十个定位取号": ["百十个定位条件"],
+            "口径1入选未入选交叉": ["A条件", "B条件"],
         }
         vals = titles.get(mode, [])
         vals = vals + [f"输入{i+1}" for i in range(len(vals), 3)]
@@ -777,7 +779,7 @@ class NumberAnalysisRoot(BoxLayout):
             self._open_shape_button_editor(index, "both")
             return
 
-        if mode == "口径1双条件全量交集" and index in (0, 1):
+        if mode in {"口径1双条件全量交集", "口径1入选未入选交叉"} and index in (0, 1):
             self._open_rule_button_editor(index, allow_multiple=False)
             return
 
@@ -1811,6 +1813,12 @@ class NumberAnalysisRoot(BoxLayout):
                 "点选百/十/个位数字，可添加多组；也可从剪贴板导入",
                 "", ""
             ),
+            "口径1入选未入选交叉": (
+                2, False,
+                "A条件，例如：999百个",
+                "B条件，例如：000百个",
+                ""
+            ),
         }
 
         input_count, need_file, h1, h2, h3 = config[mode]
@@ -1828,6 +1836,8 @@ class NumberAnalysisRoot(BoxLayout):
             extra = " 添加2个以上附件；同一组合在同一附件内只计1次。"
         elif mode == "百十个定位取号":
             extra = " 点击下面的设置按钮，直接点选百/十/个位数字，不用键盘。"
+        elif mode == "口径1入选未入选交叉":
+            extra = " 分别设置A、B两个口径1条件；自动交叉入选/未入选并合并分类。"
         elif input_count:
             extra = " 点击下面的大输入按钮设置条件。"
 
@@ -3373,6 +3383,103 @@ class NumberAnalysisRoot(BoxLayout):
 
         self.result.text = "\n".join(out)
         self.set_exports(**exports)
+
+
+    def do_17(self):
+        """
+        口径1入选/未入选交叉：
+        1) A、B 分别按“口径1正常取号”生成入选与未入选；
+        2) A入选 ∩ B未入选；
+        3) B入选 ∩ A未入选；
+        4) 两条交叉结果合并去重；
+        5) 最终结果拆分二同+三同 / 三不同。
+        """
+        pa, ea = parse_koujing1(self.input1.text.strip())
+        pb, eb = parse_koujing1(self.input2.text.strip())
+
+        if ea or eb:
+            self.result.text = f"A：{ea or '正常'}\nB：{eb or '正常'}"
+            return
+
+        ra = run_koujing1_normal(
+            pa["mother"], pa["size_pos"], pa["parity_pos"]
+        )
+        rb = run_koujing1_normal(
+            pb["mother"], pb["size_pos"], pb["parity_pos"]
+        )
+
+        A_in = set(ra["full"])
+        B_in = set(rb["full"])
+        universe = set(ALL_NUMBERS)
+        A_out = universe - A_in
+        B_out = universe - B_in
+
+        cross_ab = sorted(A_in & B_out)   # A入选 ∩ B未入选
+        cross_ba = sorted(B_in & A_out)   # B入选 ∩ A未入选
+
+        merged = sorted(set(cross_ab) | set(cross_ba))
+        overlap = sorted(set(cross_ab) & set(cross_ba))
+        same23 = [n for n in merged if repeat_type(n) != "三不同"]
+        different = [n for n in merged if repeat_type(n) == "三不同"]
+
+        A_in_sorted = sorted(A_in)
+        A_out_sorted = sorted(A_out)
+        B_in_sorted = sorted(B_in)
+        B_out_sorted = sorted(B_out)
+
+        a_name = normalize_rule_text(self.input1.text.strip())
+        b_name = normalize_rule_text(self.input2.text.strip())
+
+        out = [
+            f"A条件：{self.input1.text.strip()}",
+            f"B条件：{self.input2.text.strip()}",
+            "",
+            "【A正常分析】",
+            f"A母号大小：{ra['mother_size']}",
+            f"A母号奇偶：{ra['mother_parity']}",
+            f"A入选：{len(A_in_sorted)} 注",
+            f"A未入选：{len(A_out_sorted)} 注",
+            f"A闭环：{len(A_in_sorted)} + {len(A_out_sorted)} = 1000 √",
+            "",
+            "【B正常分析】",
+            f"B母号大小：{rb['mother_size']}",
+            f"B母号奇偶：{rb['mother_parity']}",
+            f"B入选：{len(B_in_sorted)} 注",
+            f"B未入选：{len(B_out_sorted)} 注",
+            f"B闭环：{len(B_in_sorted)} + {len(B_out_sorted)} = 1000 √",
+            "",
+            f"A入选 ∩ B未入选：{len(cross_ab)} 注",
+            f"B入选 ∩ A未入选：{len(cross_ba)} 注",
+            f"两条交叉结果重复：{len(overlap)} 注",
+            f"最终合并去重：{len(merged)} 注",
+            f"交叉合并闭环：{len(cross_ab)} + {len(cross_ba)} - {len(overlap)} = {len(merged)} √",
+            f"二同+三同：{len(same23)} 注",
+            f"三不同：{len(different)} 注",
+            f"最终分类闭环：{len(same23)} + {len(different)} = {len(merged)} √",
+            "",
+            section_text("A入选", A_in_sorted),
+            section_text("A未入选", A_out_sorted),
+            section_text("B入选", B_in_sorted),
+            section_text("B未入选", B_out_sorted),
+            section_text("A入选∩B未入选", cross_ab),
+            section_text("B入选∩A未入选", cross_ba),
+            section_text("最终合并去重", merged),
+            section_text("最终二同+三同", same23),
+            section_text("最终三不同", different),
+        ]
+
+        self.result.text = "\n".join(out)
+        self.set_exports(**{
+            f"{a_name}_A入选_{len(A_in_sorted)}注": A_in_sorted,
+            f"{a_name}_A未入选_{len(A_out_sorted)}注": A_out_sorted,
+            f"{b_name}_B入选_{len(B_in_sorted)}注": B_in_sorted,
+            f"{b_name}_B未入选_{len(B_out_sorted)}注": B_out_sorted,
+            f"A入选交B未入选_{len(cross_ab)}注": cross_ab,
+            f"B入选交A未入选_{len(cross_ba)}注": cross_ba,
+            f"交叉最终合并去重_{len(merged)}注": merged,
+            f"交叉最终二同三同_{len(same23)}注": same23,
+            f"交叉最终三不同_{len(different)}注": different,
+        })
 
 
 class NumberAnalysisApp(App):
