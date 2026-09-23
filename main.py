@@ -394,7 +394,7 @@ def parse_chain_condition(text):
 
 
 def run_chain_analysis(mother, positions):
-    """口径1正常取号 -> 入选/未入选各自频次 -> 每个频次二同三同/三不同。"""
+    """口径1正常取号 -> 两条线独立计频；只输出出现次数等于选中取位数的分类。"""
     if not re.fullmatch(r"[0-9]{3}", mother or ""):
         raise ValueError("母号必须是3位数字（可包含前导0）。")
     if not (2 <= len(positions) <= 3 and len(set(positions)) == len(positions)
@@ -1992,7 +1992,7 @@ class NumberAnalysisRoot(BoxLayout):
         elif mode == "百十个定位取号":
             extra = " 点击下面的设置按钮，直接点选百/十/个位数字，不用键盘。"
         elif mode == "连环操作":
-            extra = " 一次输入母号，选择2项或3项取位；入选与未入选分别计频、分类。"
+            extra = " 选2项只保留出现2次，选3项只保留出现3次；入选和未入选各拆两个TXT。"
         elif input_count:
             extra = " 点击下面的大输入按钮设置条件。"
 
@@ -3541,7 +3541,7 @@ class NumberAnalysisRoot(BoxLayout):
 
 
     def do_17(self):
-        """连环操作：2/3项口径1正常取号 -> 入选/未入选独立计频 -> 各桶独立分类。"""
+        """连环操作：选2项只留2次，选3项只留3次；入选/未入选各分两类。"""
         mother, positions, error = parse_chain_condition(self.input1.text)
         if error:
             self.result.text = error
@@ -3551,7 +3551,7 @@ class NumberAnalysisRoot(BoxLayout):
         count = len(positions)
         out = [
             f"母号：{mother}；取位：{'、'.join(positions)}（共{count}项）",
-            "第一步：各取位按口径1正常取号，入选和未入选分别生成。",
+            "第一步：各取位独立按口径1正常取号，产生入选和未入选。",
         ]
         for pos in positions:
             selected = result["step1"][pos]["in"]
@@ -3560,44 +3560,33 @@ class NumberAnalysisRoot(BoxLayout):
                 f"{mother}{pos}：入选{len(selected)}注 + 未入选{len(unselected)}注 = 1000 √"
             )
 
-        out.append("第二步：入选只与入选统计；未入选只与未入选统计。")
-        out.append("第三步：每个频次独立拆分二同+三同、三不同。")
+        out.append(
+            f"第二步：只保留在全部{count}个取位中都出现的组合，"
+            f"即入选出现{count}次、未入选出现{count}次；其他频次不输出。"
+        )
+        out.append("第三步：两条线分别分类为二同+三同、三不同。")
         exports = {}
 
         for category in ("入选", "未入选"):
-            bucket = result["buckets"][category]
-            out.append(f"【{category}频次统计】")
-            for k in range(1, count + 1):
-                data = bucket["by_freq"][k]
-                all_count = len(data["all"])
-                same_count = len(data["same23"])
-                diff_count = len(data["different"])
-                out.append(
-                    f"{category}出现{k}次：{all_count}注 = "
-                    f"二同+三同{same_count}注 + 三不同{diff_count}注 √"
-                )
-                # 每个频次固定只有两个最终TXT：不把不同频次/入选与未入选混合。
-                basename = f"{mother}_连环_{category}_出现{k}次"
-                exports[f"{basename}_二同三同_{same_count}注"] = data["same23"]
-                exports[f"{basename}_三不同_{diff_count}注"] = data["different"]
+            data = result["buckets"][category]["by_freq"][count]
+            all_count = len(data["all"])
+            same_count = len(data["same23"])
+            diff_count = len(data["different"])
+            if same_count + diff_count != all_count:
+                raise ValueError(f"{category}出现{count}次分类闭环失败")
 
-            bucket_counts = [len(bucket["by_freq"][k]["all"])
-                             for k in range(1, count + 1)]
             out.append(
-                f"{category}并集闭环：{' + '.join(map(str, bucket_counts))} = "
-                f"{bucket['union_count']} √"
+                f"{category}出现{count}次：{all_count}注 = "
+                f"二同+三同{same_count}注 + 三不同{diff_count}注 √"
             )
-            weighted_terms = [f"{k}×{bucket_counts[k-1]}" for k in range(1, count + 1)]
-            out.append(
-                f"{category}加权闭环：{' + '.join(weighted_terms)} = "
-                f"{bucket['weighted']}（各取位{category}注数合计）√"
-            )
+            basename = f"{mother}_连环_{category}_出现{count}次"
+            exports[f"{basename}_二同三同_{same_count}注"] = data["same23"]
+            exports[f"{basename}_三不同_{diff_count}注"] = data["different"]
 
-        total = result["buckets"]["入选"]["weighted"] + result["buckets"]["未入选"]["weighted"]
-        out.append(f"总闭环：入选加权 + 未入选加权 = {total} = {count}×1000 √")
-        out.append(f"最终分类TXT：{len(exports)}个（2类×{count}频次×2分类）。")
+        out.append("最终分类TXT：4个（入选2个、未入选2个）。")
         self.result.text = "\n".join(out)
         self.set_exports(**exports)
+
 
 
 class NumberAnalysisApp(App):
