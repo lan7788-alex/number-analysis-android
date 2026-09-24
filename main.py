@@ -137,6 +137,7 @@ MODES = [
     "多附件频次统计",
     "百十个定位取号",
     "连环操作",
+    "连环操作18（恰好两次+母号任一数字）",
 ]
 
 
@@ -459,6 +460,33 @@ def run_chain_analysis(mother, positions):
             "buckets": buckets}
 
 
+def run_chain_18(mother, positions):
+    """方案18：入选与未入选分别恰好出现2次，再筛选含母号至少一个数字。"""
+    base = run_chain_analysis(mother, positions)
+    mother_digits = set(mother)
+    selected_results = {}
+    for category in ("入选", "未入选"):
+        twice = base["buckets"][category]["by_freq"][2]["all"]
+        selected = sorted(
+            n for n in twice if any(digit in mother_digits for digit in n)
+        )
+        removed = sorted(set(twice) - set(selected))
+        same23 = [n for n in selected if repeat_type(n) != "三不同"]
+        different = [n for n in selected if repeat_type(n) == "三不同"]
+        if len(selected) + len(removed) != len(twice):
+            raise ValueError(f"{category}出现2次数字筛选闭环失败")
+        if len(same23) + len(different) != len(selected):
+            raise ValueError(f"{category}出现2次分类闭环失败")
+        selected_results[category] = {
+            "twice": twice,
+            "matched": selected,
+            "removed": removed,
+            "same23": same23,
+            "different": different,
+        }
+    return {"base": base, "results": selected_results}
+
+
 class InlineEditorProxy:
     """
     用主界面内嵌编辑页替代 Kivy Popup。
@@ -775,6 +803,7 @@ class NumberAnalysisRoot(BoxLayout):
             "三至七位拆两位组合": ["3-7位数字"],
             "百十个定位取号": ["百十个定位条件"],
             "连环操作": ["母号及取位（选2项或3项）"],
+            "连环操作18（恰好两次+母号任一数字）": ["母号及取位（选2项或3项）"],
         }
         vals = titles.get(mode, [])
         vals = vals + [f"输入{i+1}" for i in range(len(vals), 3)]
@@ -860,7 +889,7 @@ class NumberAnalysisRoot(BoxLayout):
             self._open_shape_button_editor(index, "both")
             return
 
-        if mode == "连环操作" and index == 0:
+        if mode in {"连环操作", "连环操作18（恰好两次+母号任一数字）"} and index == 0:
             self._open_chain_button_editor(index)
             return
 
@@ -1974,6 +2003,11 @@ class NumberAnalysisRoot(BoxLayout):
                 "只输入1次母号，再从百十/百个/十个中选择2项或3项",
                 "", ""
             ),
+            "连环操作18（恰好两次+母号任一数字）": (
+                1, False,
+                "输入一次母号，选2或3个取位；仅留恰好出现2次且含母号任一数字",
+                "", ""
+            ),
         }
 
         input_count, need_file, h1, h2, h3 = config[mode]
@@ -1993,6 +2027,8 @@ class NumberAnalysisRoot(BoxLayout):
             extra = " 点击下面的设置按钮，直接点选百/十/个位数字，不用键盘。"
         elif mode == "连环操作":
             extra = " 选2项只保留出现2次，选3项只保留出现3次；入选和未入选各拆两个TXT。"
+        elif mode == "连环操作18（恰好两次+母号任一数字）":
+            extra = " 选2项或3项均只取恰好出现2次；再保留含母号任意一个数字的组合，入选/未入选各拆两个TXT。"
         elif input_count:
             extra = " 点击下面的大输入按钮设置条件。"
 
@@ -3587,6 +3623,55 @@ class NumberAnalysisRoot(BoxLayout):
         self.result.text = "\n".join(out)
         self.set_exports(**exports)
 
+
+
+    def do_18(self):
+        """出现恰好2次 -> 至少含母号任意一个数字 -> 每条独立分类。"""
+        mother, positions, error = parse_chain_condition(self.input1.text)
+        if error:
+            self.result.text = error
+            return
+
+        data = run_chain_18(mother, positions)
+        out = [
+            f"方案18：母号{mother}；取位{'、'.join(positions)}（{len(positions)}项）",
+            "第一步：各取位正常口径1取号，分别生成入选/未入选。",
+        ]
+        for pos in positions:
+            ins = data["base"]["step1"][pos]["in"]
+            outs = data["base"]["step1"][pos]["out"]
+            if len(ins) + len(outs) != 1000:
+                raise ValueError(f"{pos}入选/未入选闭环失败")
+            out.append(f"{mother}{pos}：入选{len(ins)} + 未入选{len(outs)} = 1000 √")
+
+        out.append("第二步：入选与未入选独立统计，只取恰好出现2次的组合。")
+        out.append(
+            f"第三步：只留至少含母号{mother}中任意一个数字的组合；"
+            "重复母号数字不要求出现相同次数。"
+        )
+        out.append("第四步：分别分类为二同+三同、三不同；只导出4份分类TXT。")
+        exports = {}
+        for category in ("入选", "未入选"):
+            r = data["results"][category]
+            count_twice = len(r["twice"])
+            count_matched = len(r["matched"])
+            count_removed = len(r["removed"])
+            count_same = len(r["same23"])
+            count_diff = len(r["different"])
+            out.append(
+                f"{category}出现2次：{count_twice}注 = "
+                f"含母号任一数字{count_matched}注 + 不含{count_removed}注 √"
+            )
+            out.append(
+                f"{category}筛后：{count_matched}注 = "
+                f"二同+三同{count_same}注 + 三不同{count_diff}注 √"
+            )
+            basename = f"{mother}_方案18_{category}_出现2次_含母号任一数字"
+            exports[f"{basename}_二同三同_{count_same}注"] = r["same23"]
+            exports[f"{basename}_三不同_{count_diff}注"] = r["different"]
+
+        self.result.text = "\n".join(out)
+        self.set_exports(**exports)
 
 
 class NumberAnalysisApp(App):
