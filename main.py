@@ -793,7 +793,7 @@ class NumberAnalysisRoot(BoxLayout):
     def _mode_input_titles(self, mode):
         titles = {
             "口径1取号": ["口径1条件"],
-            "形态取号": ["大小 + 奇偶形态"],
+            "形态取号": ["形态取号模式 + 形态"],
             "口径1双条件全量交集": ["A条件", "B条件"],
             "口径1交集后数字形态轨": ["A条件", "B条件", "数字轨 + 4个形态轨"],
             "形态筛选": ["要去掉的大小形态", "要去掉的奇偶形态"],
@@ -1201,9 +1201,30 @@ class NumberAnalysisRoot(BoxLayout):
         popup.open()
 
     def _open_shape_button_editor(self, index, kind="both"):
-        """大小/奇偶形态直接点选，完全不用键盘。"""
+        """
+        大小/奇偶形态直接点选，完全不用键盘。
+
+        形态取号(kind="both")支持三种取号模式：
+        1. 大小+奇偶：大小与奇偶同时限制（原规则）
+        2. 仅大小：只按大小形态取号，奇偶不限
+        3. 仅奇偶：只按奇偶形态取号，大小不限
+
+        形态筛选继续沿用原来的 size / parity 单类选择方式。
+        """
         target = self._input_widgets[index]
         popup, body = self._popup_shell(self._input_titles[index])
+
+        raw_text = target.text or ""
+
+        # 仅“形态取号”使用三模式。旧版本没有“模式：”这一行时，默认兼容为大小+奇偶。
+        mode_state = {"value": "both"}
+        if kind == "both":
+            if "模式：仅大小" in raw_text:
+                mode_state["value"] = "size"
+            elif "模式：仅奇偶" in raw_text:
+                mode_state["value"] = "parity"
+            else:
+                mode_state["value"] = "both"
 
         allowed = []
         if kind in ("both", "size"):
@@ -1211,34 +1232,122 @@ class NumberAnalysisRoot(BoxLayout):
         if kind in ("both", "parity"):
             allowed += PARITY_SHAPES
 
-        selected = {x for x in allowed if x in (target.text or "")}
-        status = self._add_label(body, "", height=52, font_size="14sp")
+        selected = {x for x in allowed if x in raw_text}
+        status = self._add_label(body, "", height=54, font_size="13sp")
         buttons = {}
+        mode_buttons = {}
+
+        def current_size():
+            return [x for x in SIZE_SHAPES if x in selected]
+
+        def current_parity():
+            return [x for x in PARITY_SHAPES if x in selected]
 
         def refresh():
+            active_mode = mode_state["value"]
+
+            # 三模式下，未参与计算的一类按钮直接禁用，避免误点。
             for shape, b in buttons.items():
+                is_size = shape in SIZE_SHAPES
+                if kind == "both":
+                    enabled = (
+                        active_mode == "both"
+                        or (active_mode == "size" and is_size)
+                        or (active_mode == "parity" and not is_size)
+                    )
+                    b.disabled = not enabled
+                    b.opacity = 1 if enabled else 0.42
+                else:
+                    b.disabled = False
+                    b.opacity = 1
+
                 b.text = ("✓ " if shape in selected else "") + shape
-            s = [x for x in SIZE_SHAPES if x in selected]
-            p = [x for x in PARITY_SHAPES if x in selected]
-            parts = []
-            if kind in ("both", "size"):
-                parts.append(f"大小已选 {len(s)} 个")
-            if kind in ("both", "parity"):
-                parts.append(f"奇偶已选 {len(p)} 个")
-            status.text = "；".join(parts) + "\n再次点击可取消。"
+
+            if kind == "both":
+                mode_names = {
+                    "both": "大小+奇偶",
+                    "size": "仅大小",
+                    "parity": "仅奇偶",
+                }
+                for key, b in mode_buttons.items():
+                    b.text = ("✓ " if key == active_mode else "") + mode_names[key]
+
+                s_sel = current_size()
+                p_sel = current_parity()
+                if active_mode == "both":
+                    status.text = (
+                        f"模式：大小+奇偶；大小已选 {len(s_sel)} 个；奇偶已选 {len(p_sel)} 个\n"
+                        "判定：大小命中 AND 奇偶命中。"
+                    )
+                elif active_mode == "size":
+                    status.text = (
+                        f"模式：仅大小；大小已选 {len(s_sel)} 个\n"
+                        "判定：只看大小形态，奇偶完全不限。"
+                    )
+                else:
+                    status.text = (
+                        f"模式：仅奇偶；奇偶已选 {len(p_sel)} 个\n"
+                        "判定：只看奇偶形态，大小完全不限。"
+                    )
+            else:
+                s_sel = current_size()
+                p_sel = current_parity()
+                parts = []
+                if kind == "size":
+                    parts.append(f"大小已选 {len(s_sel)} 个")
+                if kind == "parity":
+                    parts.append(f"奇偶已选 {len(p_sel)} 个")
+                status.text = "；".join(parts) + "\n再次点击可取消。"
+
+        def set_mode(new_mode):
+            mode_state["value"] = new_mode
+            # 切到单类模式时，清掉不参与的另一类选择，避免保存后产生歧义。
+            if new_mode == "size":
+                selected.difference_update(PARITY_SHAPES)
+            elif new_mode == "parity":
+                selected.difference_update(SIZE_SHAPES)
+            refresh()
+
+        if kind == "both":
+            self._add_label(body, "取号方式", height=28)
+            mode_grid = GridLayout(
+                cols=3,
+                spacing=dp(5),
+                size_hint_y=None,
+                height=dp(46)
+            )
+            for key, label in (
+                ("both", "大小+奇偶"),
+                ("size", "仅大小"),
+                ("parity", "仅奇偶"),
+            ):
+                b = Button(text=label, font_size="14sp")
+                mode_buttons[key] = b
+                b.bind(on_release=lambda _btn, k=key: set_mode(k))
+                mode_grid.add_widget(b)
+            body.add_widget(mode_grid)
 
         def add_shape_section(label_text, shapes):
-            self._add_label(body, label_text, height=38)
-            grid = GridLayout(cols=2, spacing=dp(5), size_hint_y=None, height=dp(43)*4 + dp(12))
+            self._add_label(body, label_text, height=28)
+            grid = GridLayout(
+                cols=2,
+                spacing=dp(5),
+                size_hint_y=None,
+                height=dp(39) * 4 + dp(9)
+            )
             for shape in shapes:
                 b = Button(text=shape, font_size="15sp")
                 buttons[shape] = b
+
                 def toggle(_btn, s=shape):
+                    if _btn.disabled:
+                        return
                     if s in selected:
                         selected.remove(s)
                     else:
                         selected.add(s)
                     refresh()
+
                 b.bind(on_release=toggle)
                 grid.add_widget(b)
             body.add_widget(grid)
@@ -1249,7 +1358,16 @@ class NumberAnalysisRoot(BoxLayout):
             add_shape_section("奇偶形态", PARITY_SHAPES)
 
         def select_all(*_):
-            selected.update(allowed)
+            if kind == "both":
+                if mode_state["value"] == "both":
+                    selected.update(SIZE_SHAPES)
+                    selected.update(PARITY_SHAPES)
+                elif mode_state["value"] == "size":
+                    selected.update(SIZE_SHAPES)
+                else:
+                    selected.update(PARITY_SHAPES)
+            else:
+                selected.update(allowed)
             refresh()
 
         def clear_all(*_):
@@ -1257,17 +1375,49 @@ class NumberAnalysisRoot(BoxLayout):
             refresh()
 
         def commit(*_):
-            ordered = [x for x in SIZE_SHAPES + PARITY_SHAPES if x in selected]
-            target.text = "\n".join(ordered)
+            if kind == "both":
+                active_mode = mode_state["value"]
+                s_sel = current_size()
+                p_sel = current_parity()
+
+                if active_mode == "both" and (not s_sel or not p_sel):
+                    self._show_message(
+                        "条件未完成",
+                        "大小+奇偶模式下，大小形态和奇偶形态都至少选择1个。"
+                    )
+                    return
+                if active_mode == "size" and not s_sel:
+                    self._show_message("条件未完成", "仅大小模式至少选择1个大小形态。")
+                    return
+                if active_mode == "parity" and not p_sel:
+                    self._show_message("条件未完成", "仅奇偶模式至少选择1个奇偶形态。")
+                    return
+
+                mode_text = {
+                    "both": "模式：大小+奇偶",
+                    "size": "模式：仅大小",
+                    "parity": "模式：仅奇偶",
+                }[active_mode]
+                ordered = s_sel + p_sel
+                target.text = mode_text + "\n" + "\n".join(ordered)
+            else:
+                ordered = [x for x in SIZE_SHAPES + PARITY_SHAPES if x in selected]
+                target.text = "\n".join(ordered)
+
             self._update_input_buttons()
             popup.dismiss()
 
-        self._add_button_grid(body, [
-            ("全选", select_all),
-            ("清空", clear_all),
-            ("确定", commit),
-            ("取消", lambda *_: popup.dismiss()),
-        ], cols=2, height=52)
+        self._add_button_grid(
+            body,
+            [
+                ("全选当前", select_all),
+                ("清空", clear_all),
+                ("确定", commit),
+                ("取消", lambda *_: popup.dismiss()),
+            ],
+            cols=2,
+            height=46
+        )
         refresh()
         popup.open()
 
@@ -1925,7 +2075,7 @@ class NumberAnalysisRoot(BoxLayout):
             ),
             "形态取号": (
                 1, False,
-                "大小和奇偶一起输入，可自由混合，例如：大大大 大大小\n奇奇奇 奇奇偶",
+                "可选：大小+奇偶 / 仅大小 / 仅奇偶，再点选对应形态",
                 "", ""
             ),
             "口径1双条件全量交集": (
@@ -3009,24 +3159,73 @@ class NumberAnalysisRoot(BoxLayout):
         size_selected = [x for x in SIZE_SHAPES if x in text_all]
         parity_selected = [x for x in PARITY_SHAPES if x in text_all]
 
-        if not size_selected:
-            self.result.text = "请至少输入1个有效的大小形态。"
-            return
-        if not parity_selected:
-            self.result.text = "请至少输入1个有效的奇偶形态。"
-            return
+        if "模式：仅大小" in text_all:
+            shape_mode = "size"
+        elif "模式：仅奇偶" in text_all:
+            shape_mode = "parity"
+        else:
+            # 兼容旧存档：以前没有模式行时，仍按原“大小+奇偶”规则执行。
+            shape_mode = "both"
 
-        full = [
-            n for n in ALL_NUMBERS
-            if size_shape(n) in size_selected and parity_shape(n) in parity_selected
-        ]
+        if shape_mode == "both":
+            if not size_selected:
+                self.result.text = "大小+奇偶模式：请至少选择1个大小形态。"
+                return
+            if not parity_selected:
+                self.result.text = "大小+奇偶模式：请至少选择1个奇偶形态。"
+                return
+
+            full = [
+                n for n in ALL_NUMBERS
+                if size_shape(n) in size_selected
+                and parity_shape(n) in parity_selected
+            ]
+            mode_name = "大小+奇偶"
+            condition_lines = [
+                f"大小入选形态（{len(size_selected)}个）：" + "、".join(size_selected),
+                f"奇偶入选形态（{len(parity_selected)}个）：" + "、".join(parity_selected),
+                "判定：大小命中 AND 奇偶命中",
+            ]
+
+        elif shape_mode == "size":
+            if not size_selected:
+                self.result.text = "仅大小模式：请至少选择1个大小形态。"
+                return
+
+            full = [
+                n for n in ALL_NUMBERS
+                if size_shape(n) in size_selected
+            ]
+            mode_name = "仅大小"
+            condition_lines = [
+                f"大小入选形态（{len(size_selected)}个）：" + "、".join(size_selected),
+                "奇偶：不限",
+                "判定：只按大小形态取号",
+            ]
+
+        else:
+            if not parity_selected:
+                self.result.text = "仅奇偶模式：请至少选择1个奇偶形态。"
+                return
+
+            full = [
+                n for n in ALL_NUMBERS
+                if parity_shape(n) in parity_selected
+            ]
+            mode_name = "仅奇偶"
+            condition_lines = [
+                "大小：不限",
+                f"奇偶入选形态（{len(parity_selected)}个）：" + "、".join(parity_selected),
+                "判定：只按奇偶形态取号",
+            ]
+
+        full = sorted(full)
         same23 = [n for n in full if repeat_type(n) != "三不同"]
         diff = [n for n in full if repeat_type(n) == "三不同"]
 
         self.result.text = "\n".join([
-            "输入方式：大小和奇偶共用一个输入框",
-            f"大小入选形态（{len(size_selected)}个）：" + "、".join(size_selected),
-            f"奇偶入选形态（{len(parity_selected)}个）：" + "、".join(parity_selected),
+            f"形态取号模式：{mode_name}",
+            *condition_lines,
             f"全量入选：{len(full)} 注",
             f"二同+三同：{len(same23)} 注",
             f"三不同：{len(diff)} 注",
@@ -3035,10 +3234,17 @@ class NumberAnalysisRoot(BoxLayout):
             section_text("二同+三同", same23),
             section_text("三不同", diff),
         ])
+
+        safe_mode = {
+            "both": "大小奇偶",
+            "size": "仅大小",
+            "parity": "仅奇偶",
+        }[shape_mode]
+
         self.set_exports(**{
-            f"形态取号_全量_{len(full)}注": full,
-            f"形态取号_二同三同_{len(same23)}注": same23,
-            f"形态取号_三不同_{len(diff)}注": diff,
+            f"形态取号_{safe_mode}_全量_{len(full)}注": full,
+            f"形态取号_{safe_mode}_二同三同_{len(same23)}注": same23,
+            f"形态取号_{safe_mode}_三不同_{len(diff)}注": diff,
         })
 
     def do_3(self):
