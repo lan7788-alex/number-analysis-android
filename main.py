@@ -235,22 +235,71 @@ def normalize_rule_text(text):
 
 
 def parse_koujing1(text):
+    """
+    口径1条件解析。
+
+    兼容原格式：
+      818十个
+      888大小百十奇偶十个
+
+    新增：
+      888仅大小百十
+      888仅奇偶百个
+    """
     text = normalize_rule_text(text)
     m = re.match(r"^(\d{3})(.*)$", text)
     if not m:
         return None, "格式无法识别"
+
     mother, rule = m.group(1), m.group(2)
+
+    # 原规则：大小与奇偶使用同一个取位。
     if rule in POSITION_MAP:
-        return {"mother": mother, "size_pos": rule, "parity_pos": rule, "display_rule": rule}, None
+        return {
+            "mother": mother,
+            "mode": "both",
+            "size_pos": rule,
+            "parity_pos": rule,
+            "display_rule": rule,
+        }, None
+
+    # 原规则：大小、奇偶分别选择取位。
     m2 = re.fullmatch(r"大小(百十|百个|十个)奇偶(百十|百个|十个)", rule)
     if m2:
         return {
             "mother": mother,
+            "mode": "both",
             "size_pos": m2.group(1),
             "parity_pos": m2.group(2),
             "display_rule": f"大小{m2.group(1)} + 奇偶{m2.group(2)}",
         }, None
-    return None, "取位无法识别，例如：818十个 或 888大小百十奇偶十个"
+
+    # 新规则：只按大小口径1取号，奇偶完全不限。
+    m3 = re.fullmatch(r"仅大小(百十|百个|十个)", rule)
+    if m3:
+        return {
+            "mother": mother,
+            "mode": "size",
+            "size_pos": m3.group(1),
+            "parity_pos": None,
+            "display_rule": f"仅大小{m3.group(1)}",
+        }, None
+
+    # 新规则：只按奇偶口径1取号，大小完全不限。
+    m4 = re.fullmatch(r"仅奇偶(百十|百个|十个)", rule)
+    if m4:
+        return {
+            "mother": mother,
+            "mode": "parity",
+            "size_pos": None,
+            "parity_pos": m4.group(1),
+            "display_rule": f"仅奇偶{m4.group(1)}",
+        }, None
+
+    return None, (
+        "取位无法识别，例如：818十个、888大小百十奇偶十个、"
+        "888仅大小百十 或 888仅奇偶百个"
+    )
 
 
 def run_koujing1(mother, size_pos, parity_pos):
@@ -285,6 +334,58 @@ def run_koujing1_normal(mother, size_pos, parity_pos):
         "allowed_size": asize,
         "allowed_parity": apar,
         "full": sorted(full),
+        "same23": sorted(same23),
+        "different": sorted(different),
+    }
+
+
+def run_koujing1_normal_mode(mother, mode, size_pos=None, parity_pos=None):
+    """
+    “口径1取号”三模式：
+      both   = 大小 + 奇偶（原口径1）
+      size   = 仅大小，奇偶不限
+      parity = 仅奇偶，大小不限
+    """
+    ms, mp = size_shape(mother), parity_shape(mother)
+
+    if mode == "both":
+        if size_pos not in POSITION_MAP or parity_pos not in POSITION_MAP:
+            raise ValueError("大小+奇偶模式需要同时选择大小取位和奇偶取位")
+        asize = allowed_shapes_normal(ms, size_pos, SIZE_SHAPES)
+        apar = allowed_shapes_normal(mp, parity_pos, PARITY_SHAPES)
+        full = [
+            n for n in ALL_NUMBERS
+            if size_shape(n) in asize and parity_shape(n) in apar
+        ]
+
+    elif mode == "size":
+        if size_pos not in POSITION_MAP:
+            raise ValueError("仅大小模式需要选择大小取位")
+        asize = allowed_shapes_normal(ms, size_pos, SIZE_SHAPES)
+        apar = list(PARITY_SHAPES)
+        full = [n for n in ALL_NUMBERS if size_shape(n) in asize]
+
+    elif mode == "parity":
+        if parity_pos not in POSITION_MAP:
+            raise ValueError("仅奇偶模式需要选择奇偶取位")
+        asize = list(SIZE_SHAPES)
+        apar = allowed_shapes_normal(mp, parity_pos, PARITY_SHAPES)
+        full = [n for n in ALL_NUMBERS if parity_shape(n) in apar]
+
+    else:
+        raise ValueError(f"未知口径1模式：{mode}")
+
+    full = sorted(full)
+    same23 = [n for n in full if repeat_type(n) != "三不同"]
+    different = [n for n in full if repeat_type(n) == "三不同"]
+
+    return {
+        "mode": mode,
+        "mother_size": ms,
+        "mother_parity": mp,
+        "allowed_size": asize,
+        "allowed_parity": apar,
+        "full": full,
         "same23": sorted(same23),
         "different": sorted(different),
     }
@@ -882,7 +983,11 @@ class NumberAnalysisRoot(BoxLayout):
         mode = self.mode.text
 
         if mode == "口径1取号" and index == 0:
-            self._open_rule_button_editor(index, allow_multiple=True)
+            self._open_rule_button_editor(
+                index,
+                allow_multiple=True,
+                allow_single_attribute=True
+            )
             return
 
         if mode == "形态取号" and index == 0:
@@ -979,8 +1084,22 @@ class NumberAnalysisRoot(BoxLayout):
         body.add_widget(grid)
         return grid
 
-    def _open_rule_button_editor(self, index, allow_multiple=False):
-        """口径1条件：数字键 + 大小取位 + 奇偶取位，全程无输入框。"""
+    def _open_rule_button_editor(
+        self,
+        index,
+        allow_multiple=False,
+        allow_single_attribute=False
+    ):
+        """
+        口径1条件：数字键 + 取位按钮，全程无输入框。
+
+        allow_single_attribute=True 只用于“口径1取号”：
+          - 大小+奇偶：保持原规则
+          - 仅大小：只按大小6形态取号，奇偶不限
+          - 仅奇偶：只按奇偶6形态取号，大小不限
+
+        其他口径1相关功能继续保持原来的“大小+奇偶”双条件。
+        """
         target = self._input_widgets[index]
         title = self._input_titles[index]
         popup, body = self._popup_shell(title)
@@ -991,21 +1110,57 @@ class NumberAnalysisRoot(BoxLayout):
 
         state = {
             "mother": "",
+            "mode": "both",
             "size_pos": None,
             "parity_pos": None,
             "lines": list(existing_lines),
         }
 
-        # 单条件编辑时，尝试把已有值载入按钮状态。
+        # 单条件编辑时，尝试载入已有条件。
         if not allow_multiple and existing_lines:
             parsed, err = parse_koujing1(existing_lines[0])
             if not err:
                 state["mother"] = parsed["mother"]
-                state["size_pos"] = parsed["size_pos"]
-                state["parity_pos"] = parsed["parity_pos"]
+                state["mode"] = parsed.get("mode", "both")
+                state["size_pos"] = parsed.get("size_pos")
+                state["parity_pos"] = parsed.get("parity_pos")
 
-        preview = self._add_label(body, "", height=72, font_size="16sp")
-        self._add_label(body, "① 点数字组成3位母号", height=40)
+        preview = self._add_label(body, "", height=64, font_size="14sp")
+
+        # 只在“口径1取号”显示三模式按钮。
+        mode_buttons = {}
+        if allow_single_attribute:
+            self._add_label(body, "① 选择取号方式", height=28)
+            mode_grid = GridLayout(
+                cols=3,
+                spacing=dp(5),
+                size_hint_y=None,
+                height=dp(46)
+            )
+
+            mode_specs = [
+                ("both", "大小+奇偶"),
+                ("size", "仅大小"),
+                ("parity", "仅奇偶"),
+            ]
+
+            def choose_mode(new_mode):
+                state["mode"] = new_mode
+                if new_mode == "size":
+                    state["parity_pos"] = None
+                elif new_mode == "parity":
+                    state["size_pos"] = None
+                refresh()
+
+            for key, label in mode_specs:
+                b = Button(text=label, font_size="14sp")
+                mode_buttons[key] = b
+                b.bind(on_release=lambda _btn, k=key: choose_mode(k))
+                mode_grid.add_widget(b)
+            body.add_widget(mode_grid)
+
+        step_no = "②" if allow_single_attribute else "①"
+        self._add_label(body, f"{step_no} 点数字组成3位母号", height=30)
 
         digit_specs = []
         for d in "1234567890":
@@ -1016,45 +1171,95 @@ class NumberAnalysisRoot(BoxLayout):
                         refresh()
                 return cb
             digit_specs.append((d, make_digit_cb(d)))
-        self._add_button_grid(body, digit_specs, cols=5, height=50)
+        self._add_button_grid(body, digit_specs, cols=5, height=46)
 
-        row_specs = [
-            ("退一位", lambda *_: (state.__setitem__("mother", state["mother"][:-1]), refresh())),
-            ("清空母号", lambda *_: (state.__setitem__("mother", ""), refresh())),
-        ]
-        self._add_button_grid(body, row_specs, cols=2, height=50)
+        self._add_button_grid(body, [
+            ("退一位", lambda *_: (
+                state.__setitem__("mother", state["mother"][:-1]),
+                refresh()
+            )),
+            ("清空母号", lambda *_: (
+                state.__setitem__("mother", ""),
+                refresh()
+            )),
+        ], cols=2, height=44)
 
-        self._add_label(body, "② 选择大小取位", height=38)
+        # 大小取位区
+        size_label = self._add_label(
+            body,
+            ("③" if allow_single_attribute else "②") + " 选择大小取位",
+            height=28
+        )
         size_buttons = {}
-        size_grid = GridLayout(cols=3, spacing=dp(5), size_hint_y=None, height=dp(52))
+        size_grid = GridLayout(
+            cols=3,
+            spacing=dp(5),
+            size_hint_y=None,
+            height=dp(46)
+        )
         for pos in ("百十", "百个", "十个"):
             b = Button(text=pos, font_size="15sp")
             size_buttons[pos] = b
+
             def choose_size(_btn, p=pos):
+                if _btn.disabled:
+                    return
                 state["size_pos"] = p
                 refresh()
-            b.bind(on_press=choose_size)
+
+            b.bind(on_release=choose_size)
             size_grid.add_widget(b)
         body.add_widget(size_grid)
 
-        self._add_label(body, "③ 选择奇偶取位", height=38)
+        # 奇偶取位区
+        parity_label = self._add_label(
+            body,
+            ("④" if allow_single_attribute else "③") + " 选择奇偶取位",
+            height=28
+        )
         parity_buttons = {}
-        parity_grid = GridLayout(cols=3, spacing=dp(5), size_hint_y=None, height=dp(52))
+        parity_grid = GridLayout(
+            cols=3,
+            spacing=dp(5),
+            size_hint_y=None,
+            height=dp(46)
+        )
         for pos in ("百十", "百个", "十个"):
             b = Button(text=pos, font_size="15sp")
             parity_buttons[pos] = b
+
             def choose_parity(_btn, p=pos):
+                if _btn.disabled:
+                    return
                 state["parity_pos"] = p
                 refresh()
-            b.bind(on_press=choose_parity)
+
+            b.bind(on_release=choose_parity)
             parity_grid.add_widget(b)
         body.add_widget(parity_grid)
 
         def build_current():
-            if len(state["mother"]) != 3 or not state["size_pos"] or not state["parity_pos"]:
+            if len(state["mother"]) != 3:
                 return None
+
+            mode = state["mode"] if allow_single_attribute else "both"
+
+            if mode == "size":
+                if not state["size_pos"]:
+                    return None
+                return state["mother"] + "仅大小" + state["size_pos"]
+
+            if mode == "parity":
+                if not state["parity_pos"]:
+                    return None
+                return state["mother"] + "仅奇偶" + state["parity_pos"]
+
+            if not state["size_pos"] or not state["parity_pos"]:
+                return None
+
             if state["size_pos"] == state["parity_pos"]:
                 return state["mother"] + state["size_pos"]
+
             return (
                 state["mother"]
                 + "大小" + state["size_pos"]
@@ -1062,32 +1267,79 @@ class NumberAnalysisRoot(BoxLayout):
             )
 
         def refresh():
+            mode = state["mode"] if allow_single_attribute else "both"
+
+            mode_name = {
+                "both": "大小+奇偶",
+                "size": "仅大小",
+                "parity": "仅奇偶",
+            }[mode]
+
+            # 单属性模式下，另一类取位按钮彻底禁用，避免误操作。
+            size_enabled = mode in ("both", "size")
+            parity_enabled = mode in ("both", "parity")
+
+            for p, b in size_buttons.items():
+                b.disabled = not size_enabled
+                b.opacity = 1 if size_enabled else 0.38
+                b.text = ("✓ " if state["size_pos"] == p else "") + p
+
+            for p, b in parity_buttons.items():
+                b.disabled = not parity_enabled
+                b.opacity = 1 if parity_enabled else 0.38
+                b.text = ("✓ " if state["parity_pos"] == p else "") + p
+
+            if allow_single_attribute:
+                for key, b in mode_buttons.items():
+                    label = {
+                        "both": "大小+奇偶",
+                        "size": "仅大小",
+                        "parity": "仅奇偶",
+                    }[key]
+                    b.text = ("✓ " if mode == key else "") + label
+
             cur = build_current()
-            current_text = cur or (
-                f"母号：{state['mother'] or '未完成'}；"
-                f"大小：{state['size_pos'] or '未选'}；"
-                f"奇偶：{state['parity_pos'] or '未选'}"
-            )
+            if cur:
+                current_text = cur
+            else:
+                current_text = (
+                    f"模式：{mode_name}；母号：{state['mother'] or '未完成'}；"
+                    f"大小：{state['size_pos'] or ('不限' if mode == 'parity' else '未选')}；"
+                    f"奇偶：{state['parity_pos'] or ('不限' if mode == 'size' else '未选')}"
+                )
+
             if allow_multiple:
                 saved = "\n".join(state["lines"]) if state["lines"] else "暂无"
                 preview.text = f"当前：{current_text}\n已保存：{saved}"
             else:
                 preview.text = f"当前条件：{current_text}"
-            for p, b in size_buttons.items():
-                b.text = ("✓ " if state["size_pos"] == p else "") + p
-            for p, b in parity_buttons.items():
-                b.text = ("✓ " if state["parity_pos"] == p else "") + p
+
+        def condition_error():
+            mode = state["mode"] if allow_single_attribute else "both"
+            if len(state["mother"]) != 3:
+                return "请先输入完整3位母号。"
+            if mode == "size" and not state["size_pos"]:
+                return "仅大小模式：请选择大小取位。"
+            if mode == "parity" and not state["parity_pos"]:
+                return "仅奇偶模式：请选择奇偶取位。"
+            if mode == "both" and (not state["size_pos"] or not state["parity_pos"]):
+                return "大小+奇偶模式：请同时选择大小取位和奇偶取位。"
+            return None
 
         if allow_multiple:
+            def reset_current():
+                state["mother"] = ""
+                state["mode"] = "both"
+                state["size_pos"] = None
+                state["parity_pos"] = None
+
             def add_line(*_):
                 cur = build_current()
                 if not cur:
-                    self._show_message("条件未完成", "请先输入3位母号，并选择大小取位和奇偶取位。")
+                    self._show_message("条件未完成", condition_error() or "请完成当前条件。")
                     return
                 state["lines"].append(cur)
-                state["mother"] = ""
-                state["size_pos"] = None
-                state["parity_pos"] = None
+                reset_current()
                 refresh()
 
             def delete_last(*_):
@@ -1095,27 +1347,35 @@ class NumberAnalysisRoot(BoxLayout):
                     state["lines"].pop()
                 refresh()
 
+            def clear_all(*_):
+                state["lines"].clear()
+                reset_current()
+                refresh()
+
             self._add_button_grid(body, [
                 ("添加本条", add_line),
                 ("删除末条", delete_last),
-                ("清空全部", lambda *_: (state["lines"].clear(), state.__setitem__("mother", ""), state.__setitem__("size_pos", None), state.__setitem__("parity_pos", None), refresh())),
-            ], cols=3, height=52)
+                ("清空全部", clear_all),
+            ], cols=3, height=46)
 
             def commit(*_):
                 cur = build_current()
                 if cur:
                     state["lines"].append(cur)
+
                 if not state["lines"]:
                     self._show_message("没有条件", "请至少添加1条口径1条件。")
                     return
+
                 target.text = "\n".join(state["lines"])
                 self._update_input_buttons()
                 popup.dismiss()
+
         else:
             def commit(*_):
                 cur = build_current()
                 if not cur:
-                    self._show_message("条件未完成", "请先输入3位母号，并选择大小取位和奇偶取位。")
+                    self._show_message("条件未完成", condition_error() or "请完成当前条件。")
                     return
                 target.text = cur
                 self._update_input_buttons()
@@ -1124,7 +1384,7 @@ class NumberAnalysisRoot(BoxLayout):
         self._add_button_grid(body, [
             ("确定", commit),
             ("取消", lambda *_: popup.dismiss()),
-        ], cols=2, height=56)
+        ], cols=2, height=48)
 
         refresh()
         popup.open()
@@ -2070,7 +2330,7 @@ class NumberAnalysisRoot(BoxLayout):
         config = {
             "口径1取号": (
                 1, False,
-                "输入口径1条件，可多行，例如：899百个",
+                "可选：大小+奇偶 / 仅大小 / 仅奇偶；支持多条口径1条件",
                 "", ""
             ),
             "形态取号": (
@@ -3112,26 +3372,54 @@ class NumberAnalysisRoot(BoxLayout):
         if not lines:
             self.result.text = "请输入口径1条件。"
             return
+
         out, exports = [], {}
+
         for line in lines:
             p, err = parse_koujing1(line)
             if err:
                 out.append(f"{line}：{err}")
                 continue
 
-            r = run_koujing1_normal(p["mother"], p["size_pos"], p["parity_pos"])
+            mode = p.get("mode", "both")
+            r = run_koujing1_normal_mode(
+                p["mother"],
+                mode,
+                p.get("size_pos"),
+                p.get("parity_pos"),
+            )
 
-            # 口径1未入选：000-999 中除去“全量正常出号”的全部组合。
-            # ALL_NUMBERS 本身已按 000 -> 999 升序，因此结果天然保持升序。
             full_set = set(r["full"])
             not_selected = [n for n in ALL_NUMBERS if n not in full_set]
 
+            if mode == "both":
+                mode_name = "大小+奇偶"
+                rule_lines = [
+                    "大小正常入选6形态：" + "、".join(r["allowed_size"]),
+                    "奇偶正常入选6形态：" + "、".join(r["allowed_parity"]),
+                    "判定：大小命中 AND 奇偶命中",
+                ]
+            elif mode == "size":
+                mode_name = "仅大小"
+                rule_lines = [
+                    "大小正常入选6形态：" + "、".join(r["allowed_size"]),
+                    "奇偶：不限（8形态全部允许）",
+                    "判定：只按大小口径1取号",
+                ]
+            else:
+                mode_name = "仅奇偶"
+                rule_lines = [
+                    "大小：不限（8形态全部允许）",
+                    "奇偶正常入选6形态：" + "、".join(r["allowed_parity"]),
+                    "判定：只按奇偶口径1取号",
+                ]
+
             out += [
                 f"【{line}】",
+                f"取号模式：{mode_name}",
                 f"母号大小：{r['mother_size']}",
                 f"母号奇偶：{r['mother_parity']}",
-                "大小正常入选6形态：" + "、".join(r["allowed_size"]),
-                "奇偶正常入选6形态：" + "、".join(r["allowed_parity"]),
+                *rule_lines,
                 f"全量正常出号：{len(r['full'])} 注",
                 f"未入选组合：{len(not_selected)} 注",
                 f"二同+三同：{len(r['same23'])} 注",
