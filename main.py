@@ -734,7 +734,7 @@ class NumberAnalysisRoot(BoxLayout):
     def _mode_input_titles(self, mode):
         titles = {
             "口径1取号": ["口径1条件"],
-            "形态取号": ["大小形态 / 奇偶形态（可单选）"],
+            "形态取号": ["大小形态 / 奇偶形态（同时选择取交集）"],
             "口径1双条件全量交集": ["A条件", "B条件"],
             "口径1交集后数字形态轨": ["A条件", "B条件", "数字轨 + 4个形态轨"],
             "形态筛选": ["要去掉的大小形态", "要去掉的奇偶形态"],
@@ -1843,7 +1843,7 @@ class NumberAnalysisRoot(BoxLayout):
             ),
             "形态取号": (
                 1, False,
-                "大小或奇偶可单独选择，也可同时选择；例如：大大大，或奇奇奇，或大大大 奇奇奇",
+                "大小或奇偶可单独选择；两类同时选择时取交集。例如：大大大 奇奇奇",
                 "", ""
             ),
             "口径1双条件全量交集": (
@@ -2916,7 +2916,7 @@ class NumberAnalysisRoot(BoxLayout):
         self.set_exports(**exports)
 
     def do_2(self):
-        """形态取号：大小、奇偶可分别单独取形态，也可同时取交集。"""
+        """形态取号：大小、奇偶可分别单独筛选；两类同时选择时取交集。"""
         text_all = self.input1.text or ""
         size_selected = [x for x in SIZE_SHAPES if x in text_all]
         parity_selected = [x for x in PARITY_SHAPES if x in text_all]
@@ -2929,30 +2929,30 @@ class NumberAnalysisRoot(BoxLayout):
             )
             return
 
-        # 大小形态与奇偶形态分别取号；两类都选择时，将两边结果合并并去重（并集）。
-        # 例如“大大大 + 奇奇奇”：满足任一形态即可入选，重合号码只保留一次。
-        full_set = set()
-        for n in ALL_NUMBERS:
-            size_ok = bool(size_selected) and size_shape(n) in size_selected
-            parity_ok = bool(parity_selected) and parity_shape(n) in parity_selected
-            if size_ok or parity_ok:
-                full_set.add(n)
+        # 大小与奇偶先分别生成各自号码集合；两类都选择时，只保留同时满足两类的号码（交集）。
+        size_full = [n for n in ALL_NUMBERS if size_selected and size_shape(n) in size_selected]
+        parity_full = [n for n in ALL_NUMBERS if parity_selected and parity_shape(n) in parity_selected]
+        if size_selected and parity_selected:
+            full_set = set(size_full) & set(parity_full)
+            filter_desc = "大小形态与奇偶形态取交集（必须同时满足）"
+        elif size_selected:
+            full_set = set(size_full)
+            filter_desc = "仅按大小形态筛选"
+        else:
+            full_set = set(parity_full)
+            filter_desc = "仅按奇偶形态筛选"
         full = [n for n in ALL_NUMBERS if n in full_set]
 
         same23 = [n for n in full if repeat_type(n) != "三不同"]
         diff = [n for n in full if repeat_type(n) == "三不同"]
-        if size_selected and parity_selected:
-            filter_desc = "大小形态与奇偶形态分别取号，合并去重（并集）"
-        elif size_selected:
-            filter_desc = "仅按大小形态筛选"
-        else:
-            filter_desc = "仅按奇偶形态筛选"
 
         self.result.text = "\n".join([
-            "输入方式：大小和奇偶形态共用一个输入框；两类同时选择时分别取号、合并去重",
+            "输入方式：大小和奇偶形态共用一个输入框；两类同时选择时取交集",
             f"筛选规则：{filter_desc}",
             f"大小入选形态（{len(size_selected)}个）：" + ("、".join(size_selected) if size_selected else "未选择"),
+            f"大小筛选号码：{len(size_full)} 注" if size_selected else "大小筛选号码：未选择",
             f"奇偶入选形态（{len(parity_selected)}个）：" + ("、".join(parity_selected) if parity_selected else "未选择"),
+            f"奇偶筛选号码：{len(parity_full)} 注" if parity_selected else "奇偶筛选号码：未选择",
             f"全量入选：{len(full)} 注",
             f"二同+三同：{len(same23)} 注",
             f"三不同：{len(diff)} 注",
