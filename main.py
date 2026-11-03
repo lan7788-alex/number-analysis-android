@@ -136,7 +136,7 @@ MODES = [
     "半顺以上筛选",
     "多附件频次统计",
     "百十个定位取号",
-    "连环操作",
+    "百个/百十/十个频次统计",
 ]
 
 
@@ -386,85 +386,46 @@ def sequence_type(num):
     return "非半顺"
 
 
-def parse_chain_condition(text):
-    """按钮编辑器统一保存为 888|百十|百个[|十个]。"""
-    items = (text or "").split("|")
-    if len(items) not in (3, 4) or not re.fullmatch(r"[0-9]{3}", items[0]):
-        return None, None, "请先设置3位母号，并选择百十/百个/十个中的2项或3项。"
-    mother = items[0]
-    positions = items[1:]
-    if (len(set(positions)) != len(positions)
-            or any(pos not in POSITION_MAP for pos in positions)):
-        return None, None, "取位重复或存在无法识别的取位，请重新设置。"
-    # 固定规范顺序，不依赖勾选先后。
-    ordered = [pos for pos in POSITION_MAP if pos in positions]
-    return mother, ordered, None
-
-
-def run_chain_analysis(mother, positions):
-    """口径1正常取号 -> 入选/未入选各自频次 -> 每个频次二同三同/三不同。"""
+def run_three_position_frequency(mother):
+    """按口径1正常规则分别生成百个/百十/十个三组，再按跨组出现次数统计。"""
     if not re.fullmatch(r"[0-9]{3}", mother or ""):
         raise ValueError("母号必须是3位数字（可包含前导0）。")
-    if not (2 <= len(positions) <= 3 and len(set(positions)) == len(positions)
-            and all(pos in POSITION_MAP for pos in positions)):
-        raise ValueError("必须选择2项或3项不同的取位。")
 
-    universe = set(ALL_NUMBERS)
-    step1 = {}
-    in_frequency = {n: 0 for n in ALL_NUMBERS}
-    out_frequency = {n: 0 for n in ALL_NUMBERS}
+    position_sets = {}
+    frequency = {n: 0 for n in ALL_NUMBERS}
+    for position_name in ("百个", "百十", "十个"):
+        selected = sorted(set(run_koujing1_normal(mother, position_name, position_name)["full"]))
+        if any(n not in frequency for n in selected):
+            raise ValueError(f"{position_name}生成了全集之外的组合。")
+        position_sets[position_name] = selected
+        for number in selected:
+            frequency[number] += 1
 
-    for pos in positions:
-        # 必须使用口径1“正常”规则，不能调用旧的 run_koujing1 反方向规则。
-        r = run_koujing1_normal(mother, pos, pos)
-        selected = set(r["full"])
-        not_selected = universe - selected
-        if selected & not_selected or len(selected) + len(not_selected) != 1000:
-            raise ValueError(f"{mother}{pos} 的入选/未入选闭环失败")
-        step1[pos] = {
-            "in": sorted(selected),
-            "out": sorted(not_selected),
-        }
-        for n in selected:
-            in_frequency[n] += 1
-        for n in not_selected:
-            out_frequency[n] += 1
+    # 三组频次只能是0、1、2、3；每个频次桶互斥且覆盖000-999全集。
+    buckets = {
+        k: sorted(n for n, count in frequency.items() if count == k)
+        for k in range(4)
+    }
+    if sum(len(buckets[k]) for k in range(4)) != len(ALL_NUMBERS):
+        raise ValueError("出现0/1/2/3次频次桶未覆盖000-999全集。")
 
-    count = len(positions)
-    if any(in_frequency[n] + out_frequency[n] != count for n in ALL_NUMBERS):
-        raise ValueError("入选/未入选同号互补闭环失败")
+    union_count = sum(len(buckets[k]) for k in (1, 2, 3))
+    weighted_total = sum(k * len(buckets[k]) for k in (1, 2, 3))
+    generated_total = sum(len(numbers) for numbers in position_sets.values())
+    if weighted_total != generated_total:
+        raise ValueError("频次加权闭环失败：各频次加权总量不等于三组生成注数合计。")
+    if union_count != len(set().union(*(set(v) for v in position_sets.values()))):
+        raise ValueError("频次桶并集闭环失败。")
 
-    buckets = {}
-    for category, frequencies in (("入选", in_frequency), ("未入选", out_frequency)):
-        selected_occurrences = sum(len(step1[pos]["in" if category == "入选" else "out"])
-                                   for pos in positions)
-        by_freq = {}
-        for k in range(1, count + 1):
-            numbers = sorted(n for n, f in frequencies.items() if f == k)
-            same = [n for n in numbers if repeat_type(n) != "三不同"]
-            different = [n for n in numbers if repeat_type(n) == "三不同"]
-            if len(same) + len(different) != len(numbers):
-                raise ValueError(f"{category}出现{k}次的分类闭环失败")
-            by_freq[k] = {"all": numbers, "same23": same, "different": different}
-
-        union_count = sum(len(d["all"]) for d in by_freq.values())
-        weighted = sum(k * len(d["all"]) for k, d in by_freq.items())
-        if union_count != sum(1 for f in frequencies.values() if f):
-            raise ValueError(f"{category}频次桶的并集闭环失败")
-        if weighted != selected_occurrences:
-            raise ValueError(f"{category}频次桶加权闭环失败")
-        buckets[category] = {
-            "by_freq": by_freq,
-            "union_count": union_count,
-            "weighted": weighted,
-            "occurrences": selected_occurrences,
-            "zero": sum(f == 0 for f in frequencies.values()),
-        }
-
-    if buckets["入选"]["weighted"] + buckets["未入选"]["weighted"] != 1000 * count:
-        raise ValueError("最终总量加权闭环失败")
-    return {"mother": mother, "positions": list(positions), "step1": step1,
-            "buckets": buckets}
+    return {
+        "mother": mother,
+        "position_sets": position_sets,
+        "frequency": frequency,
+        "buckets": buckets,
+        "union_count": union_count,
+        "weighted_total": weighted_total,
+        "generated_total": generated_total,
+    }
 
 
 class InlineEditorProxy:
@@ -782,7 +743,7 @@ class NumberAnalysisRoot(BoxLayout):
             "数字包含 / 去除筛选": ["目标数字", "筛选模式"],
             "三至七位拆两位组合": ["3-7位数字"],
             "百十个定位取号": ["百十个定位条件"],
-            "连环操作": ["母号及取位（选2项或3项）"],
+            "百个/百十/十个频次统计": ["三位母号"],
         }
         vals = titles.get(mode, [])
         vals = vals + [f"输入{i+1}" for i in range(len(vals), 3)]
@@ -868,8 +829,8 @@ class NumberAnalysisRoot(BoxLayout):
             self._open_shape_button_editor(index, "both")
             return
 
-        if mode == "连环操作" and index == 0:
-            self._open_chain_button_editor(index)
+        if mode == "百个/百十/十个频次统计" and index == 0:
+            self._open_mother_number_button_editor(index)
             return
 
         if mode == "口径1双条件全量交集" and index in (0, 1):
@@ -1108,17 +1069,15 @@ class NumberAnalysisRoot(BoxLayout):
         refresh()
         popup.open()
 
-    def _open_chain_button_editor(self, index):
-        """连环：单次母号、自由勾选2或3取位；与稳定版相同的无弹窗按钮输入。"""
+    def _open_mother_number_button_editor(self, index):
+        """输入3位母号；程序随后自动分析百十、百个、十个三个位置对。"""
         target = self._input_widgets[index]
-        popup, body = self._popup_shell("连环操作：母号与取位")
-        old_mother, old_positions, err = parse_chain_condition(target.text)
-        state = {
-            "mother": old_mother if not err else "",
-            "selected": set(old_positions) if not err else set(),
-        }
+        popup, body = self._popup_shell("三位母号")
+        old_value = (target.text or "").strip()
+        state = {"mother": old_value if re.fullmatch(r"[0-9]{3}", old_value) else ""}
+
         preview = self._add_label(body, "", height=72, font_size="16sp")
-        self._add_label(body, "① 点数字组成3位母号", height=38)
+        self._add_label(body, "点数字组成3位母号（例如999）", height=40)
 
         digit_specs = []
         for digit in "1234567890":
@@ -1136,39 +1095,18 @@ class NumberAnalysisRoot(BoxLayout):
             ("清空母号", lambda *_: (state.__setitem__("mother", ""), refresh())),
         ], cols=2, height=50)
 
-        self._add_label(body, "② 选择2项或3项（可取消重选）", height=38)
-        position_buttons = {}
-        grid = GridLayout(cols=3, spacing=dp(5), size_hint_y=None, height=dp(56))
-        for pos in ("百十", "百个", "十个"):
-            button = Button(text=pos, font_size="16sp")
-            position_buttons[pos] = button
-            def select(_btn, p=pos):
-                if p in state["selected"]:
-                    state["selected"].remove(p)
-                else:
-                    state["selected"].add(p)
-                refresh()
-            button.bind(on_release=select)
-            grid.add_widget(button)
-        body.add_widget(grid)
-
         def refresh():
-            picked = [p for p in POSITION_MAP if p in state["selected"]]
-            mother_preview = state["mother"] or "未输入"
             preview.text = (
-                f"母号：{mother_preview}\n"
-                f"取位（{len(picked)}项）：{'、'.join(picked) if picked else '未选择'}"
+                f"当前母号：{state['mother'] or '未输入'}\n"
+                "自动分析位置：百个、百十、十个"
             )
-            for pos, button in position_buttons.items():
-                button.text = ("✓ " if pos in state["selected"] else "") + pos
 
         def commit(*_):
             mother = state["mother"]
-            positions = [p for p in POSITION_MAP if p in state["selected"]]
-            if len(mother) != 3 or len(positions) < 2:
-                self._show_message("条件未完成", "请输入3位母号，并至少选2个取位。")
+            if len(mother) != 3:
+                self._show_message("条件未完成", "请输入完整的3位母号。")
                 return
-            target.text = "|".join([mother] + positions)
+            target.text = mother
             self._update_input_buttons()
             popup.dismiss()
 
@@ -1978,9 +1916,9 @@ class NumberAnalysisRoot(BoxLayout):
                 "点选百/十/个位数字，可添加多组；也可从剪贴板导入",
                 "", ""
             ),
-            "连环操作": (
+            "百个/百十/十个频次统计": (
                 1, False,
-                "只输入1次母号，再从百十/百个/十个中选择2项或3项",
+                "输入1次3位母号；自动按百十、百个、十个分别从000-999生成组合，再统计出现1/2/3次",
                 "", ""
             ),
         }
@@ -2000,8 +1938,8 @@ class NumberAnalysisRoot(BoxLayout):
             extra = " 添加2个以上附件；同一组合在同一附件内只计1次。"
         elif mode == "百十个定位取号":
             extra = " 点击下面的设置按钮，直接点选百/十/个位数字，不用键盘。"
-        elif mode == "连环操作":
-            extra = " 一次输入母号，选择2项或3项取位；入选与未入选分别计频、分类。"
+        elif mode == "百个/百十/十个频次统计":
+            extra = " 输入一个3位母号，程序自动按百个、百十、十个生成三组，再输出跨三组出现1次、2次、3次的组合。"
         elif input_count:
             extra = " 点击下面的大输入按钮设置条件。"
 
@@ -3552,61 +3490,40 @@ class NumberAnalysisRoot(BoxLayout):
 
 
     def do_17(self):
-        """连环操作：2/3项口径1正常取号 -> 入选/未入选独立计频 -> 各桶独立分类。"""
-        mother, positions, error = parse_chain_condition(self.input1.text)
-        if error:
-            self.result.text = error
+        """按母号分别生成百个/百十/十个三组口径1正常结果，再统计出现1/2/3次。"""
+        mother = (self.input1.text or "").strip()
+        if not re.fullmatch(r"[0-9]{3}", mother):
+            self.result.text = "请输入3位母号，例如：999。"
             return
 
-        result = run_chain_analysis(mother, positions)
-        count = len(positions)
+        result = run_three_position_frequency(mother)
+        positions = ("百个", "百十", "十个")
+        buckets = result["buckets"]
         out = [
-            f"母号：{mother}；取位：{'、'.join(positions)}（共{count}项）",
-            "第一步：各取位按口径1正常取号，入选和未入选分别生成。",
+            f"母号：{mother}",
+            "分析范围：000-999（共1000注）",
+            "生成规则：分别按口径1正常取号，依次分析百个、百十、十个；三组结果作为三份数据统计频次。",
         ]
-        for pos in positions:
-            selected = result["step1"][pos]["in"]
-            unselected = result["step1"][pos]["out"]
-            out.append(
-                f"{mother}{pos}：入选{len(selected)}注 + 未入选{len(unselected)}注 = 1000 √"
-            )
+        for position in positions:
+            out.append(f"{mother}{position}：{len(result['position_sets'][position])}注")
 
-        out.append("第二步：入选只与入选统计；未入选只与未入选统计。")
-        out.append("第三步：每个频次独立拆分二同+三同、三不同。")
-        exports = {}
+        out.append("")
+        for k in (1, 2, 3):
+            out.append(f"出现{k}次：{len(buckets[k])}注")
+        out.extend([
+            f"出现0次（未进入任何一组）：{len(buckets[0])}注",
+            f"频次桶闭环：{len(buckets[0])} + {len(buckets[1])} + {len(buckets[2])} + {len(buckets[3])} = 1000 √",
+            f"出现1/2/3次并集：{result['union_count']}注",
+            f"加权闭环：1×{len(buckets[1])} + 2×{len(buckets[2])} + 3×{len(buckets[3])} = {result['weighted_total']}注（三组生成注数合计）√",
+        ])
+        for k in (1, 2, 3):
+            out.append(section_text(f"出现{k}次", buckets[k]))
 
-        for category in ("入选", "未入选"):
-            bucket = result["buckets"][category]
-            out.append(f"【{category}频次统计】")
-            for k in range(1, count + 1):
-                data = bucket["by_freq"][k]
-                all_count = len(data["all"])
-                same_count = len(data["same23"])
-                diff_count = len(data["different"])
-                out.append(
-                    f"{category}出现{k}次：{all_count}注 = "
-                    f"二同+三同{same_count}注 + 三不同{diff_count}注 √"
-                )
-                # 每个频次固定只有两个最终TXT：不把不同频次/入选与未入选混合。
-                basename = f"{mother}_连环_{category}_出现{k}次"
-                exports[f"{basename}_二同三同_{same_count}注"] = data["same23"]
-                exports[f"{basename}_三不同_{diff_count}注"] = data["different"]
-
-            bucket_counts = [len(bucket["by_freq"][k]["all"])
-                             for k in range(1, count + 1)]
-            out.append(
-                f"{category}并集闭环：{' + '.join(map(str, bucket_counts))} = "
-                f"{bucket['union_count']} √"
-            )
-            weighted_terms = [f"{k}×{bucket_counts[k-1]}" for k in range(1, count + 1)]
-            out.append(
-                f"{category}加权闭环：{' + '.join(weighted_terms)} = "
-                f"{bucket['weighted']}（各取位{category}注数合计）√"
-            )
-
-        total = result["buckets"]["入选"]["weighted"] + result["buckets"]["未入选"]["weighted"]
-        out.append(f"总闭环：入选加权 + 未入选加权 = {total} = {count}×1000 √")
-        out.append(f"最终分类TXT：{len(exports)}个（2类×{count}频次×2分类）。")
+        exports = {
+            f"{mother}_百个百十十个_出现1次_{len(buckets[1])}注": buckets[1],
+            f"{mother}_百个百十十个_出现2次_{len(buckets[2])}注": buckets[2],
+            f"{mother}_百个百十十个_出现3次_{len(buckets[3])}注": buckets[3],
+        }
         self.result.text = "\n".join(out)
         self.set_exports(**exports)
 
