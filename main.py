@@ -734,7 +734,7 @@ class NumberAnalysisRoot(BoxLayout):
     def _mode_input_titles(self, mode):
         titles = {
             "口径1取号": ["口径1条件"],
-            "形态取号": ["大小 + 奇偶形态"],
+            "形态取号": ["大小形态 / 奇偶形态（可单选）"],
             "口径1双条件全量交集": ["A条件", "B条件"],
             "口径1交集后数字形态轨": ["A条件", "B条件", "数字轨 + 4个形态轨"],
             "形态筛选": ["要去掉的大小形态", "要去掉的奇偶形态"],
@@ -1843,7 +1843,7 @@ class NumberAnalysisRoot(BoxLayout):
             ),
             "形态取号": (
                 1, False,
-                "大小和奇偶一起输入，可自由混合，例如：大大大 大大小\n奇奇奇 奇奇偶",
+                "大小或奇偶可单独选择，也可同时选择；例如：大大大，或奇奇奇，或大大大 奇奇奇",
                 "", ""
             ),
             "口径1双条件全量交集": (
@@ -2916,28 +2916,41 @@ class NumberAnalysisRoot(BoxLayout):
         self.set_exports(**exports)
 
     def do_2(self):
+        """形态取号：大小、奇偶可分别单独取形态，也可同时取交集。"""
         text_all = self.input1.text or ""
         size_selected = [x for x in SIZE_SHAPES if x in text_all]
         parity_selected = [x for x in PARITY_SHAPES if x in text_all]
 
-        if not size_selected:
-            self.result.text = "请至少输入1个有效的大小形态。"
-            return
-        if not parity_selected:
-            self.result.text = "请至少输入1个有效的奇偶形态。"
+        if not size_selected and not parity_selected:
+            self.result.text = (
+                "请至少输入1个有效形态：\n"
+                "大小形态：大大大、大大小、大小大、大小小、小大大、小大小、小小大、小小小\n"
+                "奇偶形态：奇奇奇、奇奇偶、奇偶奇、奇偶偶、偶奇奇、偶奇偶、偶偶奇、偶偶偶"
+            )
             return
 
-        full = [
-            n for n in ALL_NUMBERS
-            if size_shape(n) in size_selected and parity_shape(n) in parity_selected
-        ]
+        # 只选大小：按大小形态筛选；只选奇偶：按奇偶形态筛选；两类都选：两类条件同时满足。
+        full = []
+        for n in ALL_NUMBERS:
+            size_ok = (not size_selected) or (size_shape(n) in size_selected)
+            parity_ok = (not parity_selected) or (parity_shape(n) in parity_selected)
+            if size_ok and parity_ok:
+                full.append(n)
+
         same23 = [n for n in full if repeat_type(n) != "三不同"]
         diff = [n for n in full if repeat_type(n) == "三不同"]
+        if size_selected and parity_selected:
+            filter_desc = "大小形态与奇偶形态同时满足（交集）"
+        elif size_selected:
+            filter_desc = "仅按大小形态筛选"
+        else:
+            filter_desc = "仅按奇偶形态筛选"
 
         self.result.text = "\n".join([
-            "输入方式：大小和奇偶共用一个输入框",
-            f"大小入选形态（{len(size_selected)}个）：" + "、".join(size_selected),
-            f"奇偶入选形态（{len(parity_selected)}个）：" + "、".join(parity_selected),
+            "输入方式：大小和奇偶形态共用一个输入框，可任选一类单独取号",
+            f"筛选规则：{filter_desc}",
+            f"大小入选形态（{len(size_selected)}个）：" + ("、".join(size_selected) if size_selected else "未选择"),
+            f"奇偶入选形态（{len(parity_selected)}个）：" + ("、".join(parity_selected) if parity_selected else "未选择"),
             f"全量入选：{len(full)} 注",
             f"二同+三同：{len(same23)} 注",
             f"三不同：{len(diff)} 注",
