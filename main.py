@@ -2929,25 +2929,27 @@ class NumberAnalysisRoot(BoxLayout):
             )
             return
 
-        # 只选大小：按大小形态筛选；只选奇偶：按奇偶形态筛选；两类都选：两类条件同时满足。
-        full = []
+        # 大小形态与奇偶形态分别取号；两类都选择时，将两边结果合并并去重（并集）。
+        # 例如“大大大 + 奇奇奇”：满足任一形态即可入选，重合号码只保留一次。
+        full_set = set()
         for n in ALL_NUMBERS:
-            size_ok = (not size_selected) or (size_shape(n) in size_selected)
-            parity_ok = (not parity_selected) or (parity_shape(n) in parity_selected)
-            if size_ok and parity_ok:
-                full.append(n)
+            size_ok = bool(size_selected) and size_shape(n) in size_selected
+            parity_ok = bool(parity_selected) and parity_shape(n) in parity_selected
+            if size_ok or parity_ok:
+                full_set.add(n)
+        full = [n for n in ALL_NUMBERS if n in full_set]
 
         same23 = [n for n in full if repeat_type(n) != "三不同"]
         diff = [n for n in full if repeat_type(n) == "三不同"]
         if size_selected and parity_selected:
-            filter_desc = "大小形态与奇偶形态同时满足（交集）"
+            filter_desc = "大小形态与奇偶形态分别取号，合并去重（并集）"
         elif size_selected:
             filter_desc = "仅按大小形态筛选"
         else:
             filter_desc = "仅按奇偶形态筛选"
 
         self.result.text = "\n".join([
-            "输入方式：大小和奇偶形态共用一个输入框，可任选一类单独取号",
+            "输入方式：大小和奇偶形态共用一个输入框；两类同时选择时分别取号、合并去重",
             f"筛选规则：{filter_desc}",
             f"大小入选形态（{len(size_selected)}个）：" + ("、".join(size_selected) if size_selected else "未选择"),
             f"奇偶入选形态（{len(parity_selected)}个）：" + ("、".join(parity_selected) if parity_selected else "未选择"),
