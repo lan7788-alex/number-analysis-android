@@ -1918,7 +1918,7 @@ class NumberAnalysisRoot(BoxLayout):
             ),
             "百个/百十/十个频次统计": (
                 1, False,
-                "输入1次3位母号；自动按百十、百个、十个分别从000-999生成组合，再统计出现1/2/3次",
+                "输入1次3位母号；自动按百十、百个、十个分别生成组合，合并去重，并输出未入选组合",
                 "", ""
             ),
         }
@@ -1939,7 +1939,7 @@ class NumberAnalysisRoot(BoxLayout):
         elif mode == "百十个定位取号":
             extra = " 点击下面的设置按钮，直接点选百/十/个位数字，不用键盘。"
         elif mode == "百个/百十/十个频次统计":
-            extra = " 输入一个3位母号，程序自动按百个、百十、十个生成三组，再输出跨三组出现1次、2次、3次的组合。"
+            extra = " 输入一个3位母号，程序自动按百十、百个、十个生成三组；输出三组合并去重结果，以及全集中未入选的组合。"
         elif input_count:
             extra = " 点击下面的大输入按钮设置条件。"
 
@@ -3522,19 +3522,31 @@ class NumberAnalysisRoot(BoxLayout):
         for position in positions:
             out.append(f"{mother}{position}：{len(result['position_sets'][position])}注")
 
+        union = sorted(set().union(*(set(result["position_sets"][p]) for p in positions)))
+        not_selected = buckets[0]
+        if len(union) != result["union_count"]:
+            raise ValueError("三组合并去重数量与频次统计不一致。")
+        if set(union) & set(not_selected) or len(union) + len(not_selected) != 1000:
+            raise ValueError("合并去重结果与未入选组合未能互补覆盖000-999全集。")
+
         out.append("")
         for k in (1, 2, 3):
             out.append(f"出现{k}次：{len(buckets[k])}注")
         out.extend([
-            f"出现0次（未进入任何一组）：{len(buckets[0])}注",
+            f"三组合并去重：{len(union)}注",
+            f"未入选组合（出现0次）：{len(not_selected)}注",
+            f"合并与未入选闭环：{len(union)} + {len(not_selected)} = 1000 √",
             f"频次桶闭环：{len(buckets[0])} + {len(buckets[1])} + {len(buckets[2])} + {len(buckets[3])} = 1000 √",
-            f"出现1/2/3次并集：{result['union_count']}注",
             f"加权闭环：1×{len(buckets[1])} + 2×{len(buckets[2])} + 3×{len(buckets[3])} = {result['weighted_total']}注（三组生成注数合计）√",
+            section_text("百十/百个/十个三组合并去重", union),
+            section_text("未入选组合（出现0次）", not_selected),
         ])
         for k in (1, 2, 3):
             out.append(section_text(f"出现{k}次", buckets[k]))
 
         exports = {
+            f"{mother}_百十百个十个_合并去重_{len(union)}注": union,
+            f"{mother}_未入选组合_{len(not_selected)}注": not_selected,
             f"{mother}_百个百十十个_出现1次_{len(buckets[1])}注": buckets[1],
             f"{mother}_百个百十十个_出现2次_{len(buckets[2])}注": buckets[2],
             f"{mother}_百个百十十个_出现3次_{len(buckets[3])}注": buckets[3],
