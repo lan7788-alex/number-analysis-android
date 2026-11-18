@@ -736,7 +736,7 @@ class NumberAnalysisRoot(BoxLayout):
             "口径1取号": ["口径1条件"],
             "形态取号": ["大小形态 / 奇偶形态（同时选择取交集）"],
             "口径1双条件全量交集": ["A条件", "B条件"],
-            "口径1交集后数字形态轨": ["A条件", "B条件", "数字轨 + 4个形态轨"],
+            "口径1交集后数字形态轨": ["数字轨 + 4个形态轨"],
             "形态筛选": ["要去掉的大小形态", "要去掉的奇偶形态"],
             "两位组合命中筛选（按附件）": ["两位组合", "命中模式"],
             "两位组合命中筛选（000-999）": ["两位组合", "命中模式"],
@@ -837,11 +837,8 @@ class NumberAnalysisRoot(BoxLayout):
             self._open_rule_button_editor(index, allow_multiple=False)
             return
 
-        if mode == "口径1交集后数字形态轨":
-            if index in (0, 1):
-                self._open_rule_button_editor(index, allow_multiple=False)
-            elif index == 2:
-                self._open_track_button_editor(index)
+        if mode == "口径1交集后数字形态轨" and index == 0:
+            self._open_track_button_editor(index)
             return
 
         if mode == "形态筛选":
@@ -1853,10 +1850,9 @@ class NumberAnalysisRoot(BoxLayout):
                 ""
             ),
             "口径1交集后数字形态轨": (
-                3, False,
-                "母号A条件，例如：983十个",
-                "母号B条件，例如：938十个",
-                "第1行数字389；后续4行形态"
+                1, True,
+                "第1行数字轨目标；后4行分别设置4个形态轨",
+                "", ""
             ),
             "交集 / 不交集": (
                 0, True,
@@ -1936,6 +1932,8 @@ class NumberAnalysisRoot(BoxLayout):
             extra = " 添加2个以上附件，不区分角色。"
         elif mode == "多附件频次统计":
             extra = " 添加2个以上附件；同一组合在同一附件内只计1次。"
+        elif mode == "口径1交集后数字形态轨":
+            extra = " 添加1个或多个TXT附件作为轨道筛选底数；多个附件先合并去重，再按数字轨+4个形态轨筛选。"
         elif mode == "百十个定位取号":
             extra = " 点击下面的设置按钮，直接点选百/十/个位数字，不用键盘。"
         elif mode == "百个/百十/十个频次统计":
@@ -1969,6 +1967,7 @@ class NumberAnalysisRoot(BoxLayout):
             "A分别与多个文件交集",
             "合并去重",
             "多附件频次统计",
+            "口径1交集后数字形态轨",
             "形态筛选",
             "二同 / 三同 / 三不同",
             "两位组合命中筛选（按附件）",
@@ -1991,7 +1990,7 @@ class NumberAnalysisRoot(BoxLayout):
         兼容入口：
         - 交集/不交集：缺A先选A，缺B再选B
         - A分别与多个文件交集：缺A先选A，否则追加B/C/D
-        - 合并去重：追加附件
+        - 合并去重/多附件频次/口径1交集后数字形态轨：追加附件
         - 其他附件功能：选择单个附件
         """
         mode = self.mode.text
@@ -1999,7 +1998,7 @@ class NumberAnalysisRoot(BoxLayout):
             target = "A" if self.file_A is None else "B"
         elif mode == "A分别与多个文件交集":
             target = "A" if self.file_A is None else "others"
-        elif mode in {"合并去重", "多附件频次统计"}:
+        elif mode in {"合并去重", "多附件频次统计", "口径1交集后数字形态轨"}:
             target = "append"
         else:
             target = "single"
@@ -2035,7 +2034,7 @@ class NumberAnalysisRoot(BoxLayout):
             )
             return
 
-        if mode in {"合并去重", "多附件频次统计"}:
+        if mode in {"合并去重", "多附件频次统计", "口径1交集后数字形态轨"}:
             self.loaded_files = list(self.file_others)
             return
 
@@ -2088,7 +2087,7 @@ class NumberAnalysisRoot(BoxLayout):
                 make_button("添加B/C/D附件", lambda *_: self.select_file_role("others"))
             )
 
-        elif mode in {"合并去重", "多附件频次统计"}:
+        elif mode in {"合并去重", "多附件频次统计", "口径1交集后数字形态轨"}:
             self.file_button_row.add_widget(
                 make_button("添加附件", lambda *_: self.select_file_role("append"))
             )
@@ -2177,6 +2176,9 @@ class NumberAnalysisRoot(BoxLayout):
 
         if mode == "交集 / 不交集":
             return "exact", 2
+
+        if mode == "口径1交集后数字形态轨":
+            return "minimum", 1
 
         if mode in {"A分别与多个文件交集", "合并去重", "多附件频次统计"}:
             return "minimum", 2
@@ -2506,7 +2508,7 @@ class NumberAnalysisRoot(BoxLayout):
             self.files_label.text = "；".join(lines)
             return
 
-        if mode in {"合并去重", "多附件频次统计"}:
+        if mode in {"合并去重", "多附件频次统计", "口径1交集后数字形态轨"}:
             if not self.file_others:
                 self.files_label.text = "未选择附件"
             else:
@@ -3008,68 +3010,76 @@ class NumberAnalysisRoot(BoxLayout):
         })
 
     def do_4(self):
-        pa, ea = parse_koujing1(self.input1.text.strip())
-        pb, eb = parse_koujing1(self.input2.text.strip())
-        if ea or eb:
-            self.result.text = f"A：{ea or '正常'}\nB：{eb or '正常'}"
+        """对添加的TXT附件合并去重后，执行数字轨与4个形态轨筛选。"""
+        if not self.need_files(minimum=1):
             return
-        lines = [x.strip() for x in self.input3.text.splitlines() if x.strip()]
+
+        lines = [x.strip() for x in self.input1.text.splitlines() if x.strip()]
         if len(lines) < 5:
-            self.result.text = "输入3需要：第1行数字轨，后4行形态轨。"
+            self.result.text = "输入需要5行：第1行数字轨，后4行分别为4个形态轨。"
             return
+
         digits = parse_digit_track(lines[0])
         shapes = lines[1:5]
-        if not digits or any(classify_shape_token(x) is None for x in shapes):
-            self.result.text = "数字轨或4个形态轨无法识别。"
+        if not digits:
+            self.result.text = "数字轨无法识别，请至少选择1个数字。"
             return
-        A = set(run_koujing1(pa["mother"], pa["size_pos"], pa["parity_pos"])["different"])
-        B = set(run_koujing1(pb["mother"], pb["size_pos"], pb["parity_pos"])["different"])
-        inter = sorted(A & B)
-        ao = sorted(A - B)
-        bo = sorted(B - A)
-        non = sorted((A - B) | (B - A))
-        db, bc = run_digit_track(non, digits)
-        valid_shapes, sb, cd = run_shape_track(non, shapes)
+        if len(shapes) != 4 or len(set(shapes)) != 4 or any(classify_shape_token(x) is None for x in shapes):
+            self.result.text = "4个形态轨必须是4个不同的有效完整形态（大小/奇偶可混合）。"
+            return
+
+        # 一个或多个TXT附件都作为原始底数；多个附件先合并去重。
+        file_rows = []
+        file_sets = []
+        empty_files = []
+        for path in self.loaded_files:
+            nums = set(self.read_file(path))
+            if not nums:
+                empty_files.append(os.path.basename(path))
+                continue
+            file_sets.append(nums)
+            file_rows.append((os.path.basename(path), len(nums)))
+
+        if empty_files:
+            self.result.text = "以下附件没有识别到有效三位组合，请检查TXT内容：\n" + "\n".join(empty_files)
+            return
+        if not file_sets:
+            self.result.text = "附件中没有识别到有效三位组合。"
+            return
+
+        base = sorted(set().union(*file_sets))
+        db, bc = run_digit_track(base, digits)
+        valid_shapes, sb, cd = run_shape_track(base, shapes)
         final_in = sorted(set(bc) & set(cd))
-        final_out = sorted(set(non) - set(final_in))
+        final_out = sorted(set(base) - set(final_in))
+
         out = [
-            f"A三不同：{len(A)} 注",
-            f"B三不同：{len(B)} 注",
-            f"交集：{len(inter)} 注",
-            f"A独有：{len(ao)} 注",
-            f"B独有：{len(bo)} 注",
-            f"不交集合并：{len(non)} 注",
-            f"前置闭环：{len(A)} + {len(B)} = 2×{len(inter)} + {len(non)} = {len(A)+len(B)} √",
-            section_text("A三不同", sorted(A)),
-            section_text("B三不同", sorted(B)),
-            section_text("交集", inter),
-            section_text("A独有", ao),
-            section_text("B独有", bo),
-            section_text("不交集合并", non),
+            f"附件数量：{len(file_rows)} 个",
+        ]
+        for idx, (name, count) in enumerate(file_rows, start=1):
+            out.append(f"附件{idx}：{name} = {count} 注")
+        out += [
+            f"附件合并去重底数：{len(base)} 注",
             "数字轨目标：" + "、".join(digits),
         ]
         for count in sorted(db):
             out.append(section_text(f"数字轨出现{count}次", db[count]))
         out += [
-            section_text("数字BC（2次+3次）", bc),
+            section_text("数字BC（出现2次+3次）", bc),
             "形态轨：" + "、".join(x for x, _ in valid_shapes),
         ]
         for count in sorted(sb):
             out.append(section_text(f"形态轨出现{count}次", sb[count]))
         out += [
-            section_text("形态CD（3次+4次）", cd),
+            section_text("形态CD（出现3次+4次）", cd),
             section_text("最终入选 BC∩CD", final_in),
             section_text("最终不入选", final_out),
-            f"最终闭环：{len(final_in)} + {len(final_out)} = {len(non)} √",
+            f"最终闭环：{len(final_in)} + {len(final_out)} = {len(base)} √",
         ]
         self.result.text = "\n".join(out)
+
         exports = {
-            f"A三不同_{len(A)}注": sorted(A),
-            f"B三不同_{len(B)}注": sorted(B),
-            f"交集_{len(inter)}注": inter,
-            f"A独有_{len(ao)}注": ao,
-            f"B独有_{len(bo)}注": bo,
-            f"不交集合并_{len(non)}注": non,
+            f"附件合并去重底数_{len(base)}注": base,
             f"数字BC_{len(bc)}注": bc,
             f"形态CD_{len(cd)}注": cd,
             f"最终入选_{len(final_in)}注": final_in,
@@ -3097,6 +3107,11 @@ class NumberAnalysisRoot(BoxLayout):
                 self.result.text = (
                     "请先选择A附件，并至少添加1个B/C/D附件。"
                 )
+                return False
+
+        elif mode == "口径1交集后数字形态轨":
+            if len(self.file_others) < 1:
+                self.result.text = "请先添加至少1个TXT附件，作为数字形态轨的筛选底数。"
                 return False
 
         elif mode in {"合并去重", "多附件频次统计"}:
