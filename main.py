@@ -132,7 +132,7 @@ MODES = [
     "两位组合命中筛选（按附件）",
     "两位组合命中筛选（000-999）",
     "数字包含 / 去除筛选",
-    "三至七位拆两位组合",
+    "三至八位拆两位组合",
     "半顺以上筛选",
     "多附件频次统计",
     "百十个定位取号",
@@ -363,7 +363,7 @@ def run_pair_filter(base_nums, pair_set, mode):
 
 def split_to_pairs(token):
     token = (token or "").strip()
-    if not (token.isdigit() and 3 <= len(token) <= 7):
+    if not (token.isdigit() and 3 <= len(token) <= 8):
         return []
     pairs = set()
     for i, j in combinations(range(len(token)), 2):
@@ -372,7 +372,7 @@ def split_to_pairs(token):
 
 
 def parse_split_inputs(text):
-    return re.findall(r"(?<!\d)\d{3,7}(?!\d)", text or "")
+    return re.findall(r"(?<!\d)\d{3,8}(?!\d)", text or "")
 
 
 def sequence_type(num):
@@ -741,7 +741,7 @@ class NumberAnalysisRoot(BoxLayout):
             "两位组合命中筛选（按附件）": ["两位组合", "命中模式"],
             "两位组合命中筛选（000-999）": ["两位组合", "命中模式"],
             "数字包含 / 去除筛选": ["目标数字", "筛选模式"],
-            "三至七位拆两位组合": ["3-7位数字"],
+            "三至八位拆两位组合": ["3-8位数字"],
             "百十个定位取号": ["百十个定位条件"],
             "百个/百十/十个频次统计": ["三位母号"],
         }
@@ -814,7 +814,7 @@ class NumberAnalysisRoot(BoxLayout):
         纯按钮输入总入口。
 
         不再打开 Android EditText / Kivy TextInput 键盘输入框。
-        需要文字量较大的项目（两位组合、3-7位组合）提供“从剪贴板导入”。
+        需要文字量较大的项目（两位组合、3-8位组合）提供“从剪贴板导入”。
         """
         if not 0 <= index < 3:
             return
@@ -862,7 +862,7 @@ class NumberAnalysisRoot(BoxLayout):
                 self._open_digit_filter_mode_editor(index)
             return
 
-        if mode == "三至七位拆两位组合" and index == 0:
+        if mode == "三至八位拆两位组合" and index == 0:
             self._open_split_button_editor(index)
             return
 
@@ -1439,7 +1439,7 @@ class NumberAnalysisRoot(BoxLayout):
         popup.open()
 
     def _open_split_button_editor(self, index):
-        """3-7位：数字按钮逐组添加，或从剪贴板导入；最终仍只输出合并去重结果。"""
+        """3-8位：数字按钮逐组添加，或从剪贴板导入；最终仍只输出合并去重结果。"""
         target = self._input_widgets[index]
         popup, body = self._popup_shell(self._input_titles[index])
         groups = parse_split_inputs(target.text)
@@ -1451,12 +1451,12 @@ class NumberAnalysisRoot(BoxLayout):
             if len(groups) > 18:
                 shown += "……"
             status.text = (
-                f"当前组：{buffer['text'] or '未输入'}（3-7位）\n"
+                f"当前组：{buffer['text'] or '未输入'}（3-8位）\n"
                 f"已添加 {len(groups)} 组：{shown or '暂无'}"
             )
 
         def add_digit(d):
-            if len(buffer["text"]) < 7:
+            if len(buffer["text"]) < 8:
                 buffer["text"] += d
             refresh()
 
@@ -1465,8 +1465,8 @@ class NumberAnalysisRoot(BoxLayout):
 
         def add_group(*_):
             s = buffer["text"]
-            if not (3 <= len(s) <= 7):
-                self._show_message("位数不对", "每组必须是3-7位数字。")
+            if not (3 <= len(s) <= 8):
+                self._show_message("位数不对", "每组必须是3-8位数字。")
                 return
             groups.append(s)
             buffer["text"] = ""
@@ -1476,7 +1476,7 @@ class NumberAnalysisRoot(BoxLayout):
             clip = Clipboard.paste() or ""
             found = parse_split_inputs(clip)
             if not found:
-                self._show_message("剪贴板没有3-7位数字", "请先复制3-7位数字，例如：345 4567 1234567。")
+                self._show_message("剪贴板没有3-8位数字", "请先复制3-8位数字，例如：345 4567 12345678。")
                 return
             groups[:] = found
             buffer["text"] = ""
@@ -1484,14 +1484,14 @@ class NumberAnalysisRoot(BoxLayout):
 
         def commit(*_):
             if buffer["text"]:
-                if 3 <= len(buffer["text"]) <= 7:
+                if 3 <= len(buffer["text"]) <= 8:
                     groups.append(buffer["text"])
                     buffer["text"] = ""
                 else:
-                    self._show_message("当前组未完成", "当前组必须是3-7位数字，或者先点“退一位/清空当前”。")
+                    self._show_message("当前组未完成", "当前组必须是3-8位数字，或者先点“退一位/清空当前”。")
                     return
             if not groups:
-                self._show_message("没有数据", "请至少添加1组3-7位数字。")
+                self._show_message("没有数据", "请至少添加1组3-8位数字。")
                 return
             target.text = "\n".join(groups)
             self._update_input_buttons()
@@ -1894,9 +1894,9 @@ class NumberAnalysisRoot(BoxLayout):
                 "第1行：任意/全部；第2行：筛出/去掉",
                 ""
             ),
-            "三至七位拆两位组合": (
+            "三至八位拆两位组合": (
                 1, False,
-                "输入3-7位数字，可多组；最终只输出全部合并去重结果",
+                "输入3-8位数字，可多组；最终只输出全部合并去重结果",
                 "", ""
             ),
             "半顺以上筛选": (
@@ -3363,7 +3363,7 @@ class NumberAnalysisRoot(BoxLayout):
     def do_13(self):
         tokens = parse_split_inputs(self.input1.text)
         if not tokens:
-            self.result.text = "请输入3-7位数字。"
+            self.result.text = "请输入3-8位数字。"
             return
 
         merged = set()
@@ -3373,7 +3373,7 @@ class NumberAnalysisRoot(BoxLayout):
         merged = sorted(merged)
         self.result.text = pair_section_text("合并去重结果", merged)
         self.set_exports(**{
-            f"三至七位拆两位_合并去重_{len(merged)}组": merged
+            f"三至八位拆两位_合并去重_{len(merged)}组": merged
         })
 
     def do_14(self):
