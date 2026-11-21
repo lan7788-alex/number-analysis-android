@@ -138,7 +138,6 @@ MODES = [
     "百十个定位取号",
     "百个/百十/十个频次统计",
     "组选拆成直选",
-    "直选合并成组选",
 ]
 
 
@@ -747,7 +746,6 @@ class NumberAnalysisRoot(BoxLayout):
             "百十个定位取号": ["百十个定位条件"],
             "百个/百十/十个频次统计": ["三位母号"],
             "组选拆成直选": ["三位组选号码"],
-            "直选合并成组选": ["三位直选号码"],
         }
         vals = titles.get(mode, [])
         vals = vals + [f"输入{i+1}" for i in range(len(vals), 3)]
@@ -874,7 +872,7 @@ class NumberAnalysisRoot(BoxLayout):
             self._open_position_button_editor(index)
             return
 
-        if mode in {"组选拆成直选", "直选合并成组选"} and index == 0:
+        if mode == "组选拆成直选" and index == 0:
             if platform == "android":
                 self._open_native_input_editor(index)
             else:
@@ -1933,11 +1931,6 @@ class NumberAnalysisRoot(BoxLayout):
                 "输入三位组选号码（可多组），或选择TXT附件；例如123会展开为123、132、213、231、312、321",
                 "", ""
             ),
-            "直选合并成组选": (
-                1, True,
-                "输入三位直选号码（可多组），或选择TXT附件；例如123、132、213会合并为组选123",
-                "", ""
-            ),
         }
 
         input_count, need_file, h1, h2, h3 = config[mode]
@@ -1961,8 +1954,6 @@ class NumberAnalysisRoot(BoxLayout):
             extra = " 输入一个3位母号，程序自动按百十、百个、十个生成三组；输出三组合并去重结果，以及全集中未入选的组合。"
         elif mode == "组选拆成直选":
             extra = " 可在输入框录入三位组选号码，也可选择TXT附件；两种来源可以同时使用，全部排列后合并去重。重复数字只生成不同排列。"
-        elif mode == "直选合并成组选":
-            extra = " 可在输入框录入三位直选号码，也可选择TXT附件；相同数字组成的不同排列会合并为同一个组选，例如123、132、213最终合并为123。"
         elif input_count:
             extra = " 点击下面的大输入按钮设置条件。"
 
@@ -1999,7 +1990,6 @@ class NumberAnalysisRoot(BoxLayout):
             "数字包含 / 去除筛选",
             "半顺以上筛选",
             "组选拆成直选",
-            "直选合并成组选",
         }
         self._configure_file_controls(self.mode.text, need_file)
 
@@ -3002,8 +2992,9 @@ class NumberAnalysisRoot(BoxLayout):
         if ea or eb:
             self.result.text = f"A：{ea or '正常'}\nB：{eb or '正常'}"
             return
-        A = set(run_koujing1(pa["mother"], pa["size_pos"], pa["parity_pos"])["full"])
-        B = set(run_koujing1(pb["mother"], pb["size_pos"], pb["parity_pos"])["full"])
+        # A、B统一使用“口径1取号”的正常取号规则，避免A/B规则不一致。
+        A = set(run_koujing1_normal(pa["mother"], pa["size_pos"], pa["parity_pos"])["full"])
+        B = set(run_koujing1_normal(pb["mother"], pb["size_pos"], pb["parity_pos"])["full"])
         inter = sorted(A & B)
         ao = sorted(A - B)
         bo = sorted(B - A)
@@ -3636,49 +3627,6 @@ class NumberAnalysisRoot(BoxLayout):
         ])
         self.set_exports(**{
             f"组选拆直选_合并去重_{len(merged)}注": merged,
-        })
-
-
-    def do_19(self):
-        """将三位直选号码按数字组成归并为组选；不同排列合并去重。"""
-        directs = set(parse_numbers(self.input1.text or ""))
-
-        # 附件为可选输入；若同时填写文本与附件，两边直选合并后再去重。
-        if self.file_single:
-            directs.update(self.read_file(self.file_single))
-
-        directs = sorted(directs)
-        if not directs:
-            self.result.text = (
-                "没有识别到有效的三位直选号码。\n"
-                "请直接输入三位号码（例如123 132 456），或选择包含三位直选号码的TXT附件。"
-            )
-            return
-
-        # 组选以数字升序作为唯一标准：123、132、213等都归为123；
-        # 重复数字也保留原样，例如211、121、112都归为112。
-        grouped = {}
-        for direct in directs:
-            group = "".join(sorted(direct))
-            grouped.setdefault(group, []).append(direct)
-
-        groups = sorted(grouped)
-        detail_lines = [
-            f"{group}：" + "、".join(grouped[group])
-            for group in groups
-        ]
-
-        self.result.text = "\n".join([
-            "转换规则：直选只看三个数字的组成，不区分数字位置；相同数字组成归并为一个组选。",
-            f"有效直选：{len(directs)} 注（已去除重复直选）",
-            f"最终组选合并去重：{len(groups)} 组",
-            "各组选对应的直选：",
-            *(detail_lines if detail_lines else ["（无）"]),
-            section_text("组选合并去重结果", groups),
-        ])
-        self.set_exports(**{
-            f"直选转组选_合并去重_{len(groups)}组": groups,
-            f"直选转组选_来源直选_{len(directs)}注": directs,
         })
 
 
